@@ -194,11 +194,11 @@ export async function signMessage(
     if (!targetCredentialId) {
       throw new Error("No credential ID provided or found in storage");
     }
-    const challengeBuffer = sha256(new TextEncoder().encode(message));
+    const challenge = Buffer.from(message, "base64");
 
     const credential = (await navigator.credentials.get({
       publicKey: {
-        challenge: challengeBuffer as any,
+        challenge,
         allowCredentials: [{
           type: "public-key",
           id: new Uint8Array(Buffer.from(targetCredentialId, "base64"))
