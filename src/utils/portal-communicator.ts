@@ -134,7 +134,24 @@ export class PortalCommunicator {
             ...(response.error ? { error: { message: response.error, details: response.details } } : {})
         }
 
-        // 2. Iframe
+        // 2. Expo WebView (window.ReactNativeWebView)
+        if ((window as any).ReactNativeWebView) {
+            // Send data first
+            (window as any).ReactNativeWebView.postMessage(JSON.stringify({
+                type: response.type,
+                data: effectiveData
+            }));
+
+            // Then close
+            setTimeout(() => {
+                (window as any).ReactNativeWebView.postMessage(JSON.stringify({
+                    type: "CLOSE_WEBVIEW"
+                }));
+            }, 1000); // Small delay to ensure data processing
+            return;
+        }
+
+        // 3. Iframe
         if (isIframe()) {
             window.parent.postMessage(messageData, '*')
             return
