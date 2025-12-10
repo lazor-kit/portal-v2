@@ -87,7 +87,24 @@ export class PortalCommunicator {
             ...(response.accountName ? { accountName: response.accountName } : {}),
         }
 
-        // 1. Expo (AuthSession Redirect)
+        // 1. Expo WebView (window.ReactNativeWebView) - PRIORITIZE THIS
+        if ((window as any).ReactNativeWebView) {
+            // Send data first
+            (window as any).ReactNativeWebView.postMessage(JSON.stringify({
+                type: response.type,
+                data: effectiveData
+            }));
+
+            // Then close
+            setTimeout(() => {
+                (window as any).ReactNativeWebView.postMessage(JSON.stringify({
+                    type: "CLOSE_WEBVIEW"
+                }));
+            }, 1000); // Small delay to ensure data processing
+            return;
+        }
+
+        // 2. Expo (AuthSession Redirect)
         if (env === 'expo' && (params.expoParam || params.redirectUrl)) {
             const targetUrl = params.expoParam || params.redirectUrl || '';
             if (!targetUrl) return;
@@ -132,23 +149,6 @@ export class PortalCommunicator {
             type: response.type,
             data: effectiveData,
             ...(response.error ? { error: { message: response.error, details: response.details } } : {})
-        }
-
-        // 2. Expo WebView (window.ReactNativeWebView)
-        if ((window as any).ReactNativeWebView) {
-            // Send data first
-            (window as any).ReactNativeWebView.postMessage(JSON.stringify({
-                type: response.type,
-                data: effectiveData
-            }));
-
-            // Then close
-            setTimeout(() => {
-                (window as any).ReactNativeWebView.postMessage(JSON.stringify({
-                    type: "CLOSE_WEBVIEW"
-                }));
-            }, 1000); // Small delay to ensure data processing
-            return;
         }
 
         // 3. Iframe
