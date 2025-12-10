@@ -35,12 +35,9 @@ export default function Home() {
         if (portalParams?.action === 'sign' && portalParams.message) {
             setScreen("transaction")
         } else {
-            // If just connect, we might want to stay or show success?
-            // For this specific 'portal' flow, usually 'connect' ends the flow or waits.
-            // But existing behavior was 'setScreen("transaction")'. 
-            // Let's keep it 'wallet' if explicitly 'connect', or 'transaction' if explicitly 'sign'.
-            // If default behavior:
-            setScreen("transaction")
+            // For connect action, we stay on the wallet screen
+            // The PortalCommunicator.reply handles the redirect for Expo
+            console.log("Connected, waiting for redirect or next action")
         }
     }
 
