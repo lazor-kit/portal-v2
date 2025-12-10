@@ -23,6 +23,10 @@ export interface PortalResponse {
     credentialId?: string
     publickey?: string
     accountName?: string
+    timestamp?: string
+    environment?: string
+    platform?: string
+    expo?: string | null
 }
 
 export class PortalCommunicator {
@@ -104,6 +108,12 @@ export class PortalCommunicator {
                     if (effectiveData.accountName) url.searchParams.set('accountName', effectiveData.accountName);
                     if (effectiveData.normalized) url.searchParams.set('signature', effectiveData.normalized);
                     if (effectiveData.msg) url.searchParams.set('msg', effectiveData.msg);
+
+                    // Add validation/metadata fields
+                    if (effectiveData.timestamp) url.searchParams.set('timestamp', effectiveData.timestamp);
+                    if (effectiveData.environment) url.searchParams.set('environment', effectiveData.environment);
+                    if (effectiveData.platform) url.searchParams.set('platform', effectiveData.platform);
+                    if (effectiveData.expo) url.searchParams.set('expo', effectiveData.expo);
 
                     // Flatten other data if reasonable or needed
                 }
