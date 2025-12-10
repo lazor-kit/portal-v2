@@ -104,8 +104,8 @@ export class PortalCommunicator {
             return;
         }
 
-        // 2. Expo (AuthSession Redirect)
-        if (env === 'expo' && (params.expoParam || params.redirectUrl)) {
+        // 2. Expo (AuthSession Redirect) OR Standard Redirect
+        if ((env === 'expo' && params.expoParam) || params.redirectUrl) {
             const targetUrl = params.expoParam || params.redirectUrl || '';
             if (!targetUrl) return;
 
