@@ -92,7 +92,11 @@ export function WalletConnection({ onConnect, portalParams }: WalletConnectionPr
           type: "WALLET_CONNECTED",
           credentialId: result.credentialId,
           publickey: undefined, // SignIn might not return public key
-          accountName: storedAccountName
+          accountName: storedAccountName,
+          timestamp: new Date().toISOString(),
+          environment: portalParams.expoParam ? 'expo' : 'browser',
+          platform: portalParams.expoParam ? 'mobile' : 'web',
+          expo: portalParams.expoParam
         }, portalParams)
       }
       onConnect(result.credentialId) // Added back onConnect call
@@ -127,7 +131,11 @@ export function WalletConnection({ onConnect, portalParams }: WalletConnectionPr
           type: "WALLET_CONNECTED",
           credentialId: result.credentialId,
           publickey: result.publickey, // Returns both credentialId + publickey
-          accountName: nameToUse // Return the created account name
+          accountName: nameToUse, // Return the created account name
+          timestamp: new Date().toISOString(),
+          environment: portalParams.expoParam ? 'expo' : 'browser',
+          platform: portalParams.expoParam ? 'mobile' : 'web',
+          expo: portalParams.expoParam
         }, portalParams)
       }
       onConnect(result.credentialId) // Added back onConnect call
