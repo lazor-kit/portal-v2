@@ -162,22 +162,6 @@ export function WalletConnection({ onConnect, portalParams }: WalletConnectionPr
     <div className="flex flex-col items-center justify-center w-full h-full p-6 space-y-6">
       <div className="space-y-1 relative text-center w-full">
         <h1 className="text-2xl font-bold">Welcome</h1>
-        <div className="flex items-center justify-center gap-2 mt-2 flex-wrap text-sm text-muted-foreground">
-          <span>Connect to</span>
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-foreground">{origin || "application"}</span>
-            {origin && (
-              <>
-                {status === "verified" && <BadgeCheck className="w-4 h-4 text-green-500" />}
-                {status === "unverified" && <ShieldAlert className="w-4 h-4 text-orange-500" />}
-                {status === "loading" && <div className="w-3 h-3 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />}
-              </>
-            )}
-          </div>
-        </div>
-        {status === "unverified" && origin && (
-          <div className="text-[10px] text-orange-500 font-medium mt-1">Unverified Domain</div>
-        )}
       </div>
 
       <div className="w-full space-y-4">
