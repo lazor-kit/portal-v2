@@ -125,6 +125,8 @@ export class PortalCommunicator {
                     if (effectiveData.accountName) url.searchParams.set('accountName', effectiveData.accountName);
                     if (effectiveData.normalized) url.searchParams.set('signature', effectiveData.normalized);
                     if (effectiveData.msg) url.searchParams.set('msg', effectiveData.msg);
+                    if (effectiveData.clientDataJSONReturn) url.searchParams.set('clientDataJSONReturn', effectiveData.clientDataJSONReturn);
+                    if (effectiveData.authenticatorDataReturn) url.searchParams.set('authenticatorDataReturn', effectiveData.authenticatorDataReturn);
 
                     // Add validation/metadata fields
                     if (effectiveData.timestamp) url.searchParams.set('timestamp', effectiveData.timestamp);
