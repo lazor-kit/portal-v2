@@ -188,7 +188,7 @@ export function WalletConnection({ onConnect, portalParams }: WalletConnectionPr
           className="w-full h-14 text-base font-semibold shadow-sm transition-all hover:scale-[1.01] rounded-xl"
         >
           <Wallet className="w-5 h-5 mr-2" />
-          {isLoading ? "Connecting..." : "Sign in with LazorKit"}
+          {isLoading ? "Connecting..." : "Sign in"}
           {!isLoading && <ArrowRight className="w-4 h-4 ml-2 opacity-80" />}
         </Button>
 
