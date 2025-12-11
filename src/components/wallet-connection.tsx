@@ -217,14 +217,6 @@ export function WalletConnection({ onConnect, portalParams }: WalletConnectionPr
           </Button>
         </form>
       </div>
-
-      <div className="flex-1" />
-
-      <div className="pt-2 w-full text-center">
-        <p className="text-[10px] text-muted-foreground/50 w-full uppercase tracking-widest font-medium">
-          Secured by LazorKit
-        </p>
-      </div>
     </div>
   )
 }
