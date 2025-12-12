@@ -122,16 +122,6 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
 
         {/* Header: Origin & Account */}
         <div className="flex items-center justify-between pb-3 border-b border-border/40">
-          <div className="flex flex-col gap-0.5">
-            <span className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wide">Requested by</span>
-            <div className="flex items-center gap-1.5">
-              <div className="w-4 h-4 rounded-full bg-primary/20 flex items-center justify-center text-[10px] font-bold text-primary">
-                {origin.charAt(0).toUpperCase()}
-              </div>
-              <span className="text-xs font-semibold text-foreground">{origin}</span>
-            </div>
-          </div>
-
           <div className="flex items-center gap-2 bg-muted/40 px-2.5 py-1 rounded-full border border-border/40">
             <div className="w-4 h-4 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-[8px] text-white font-bold">
               {accountName.charAt(0).toUpperCase()}
