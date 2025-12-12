@@ -238,7 +238,7 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
           </Button>
           <Button
             onClick={handleApprove}
-            variant="positive"
+            variant="default"
             disabled={isSigning || !!error || (simulation?.error ? true : false)}
             className="w-full font-semibold py-2 rounded-lg h-10 text-sm"
           >
