@@ -128,7 +128,6 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
               <div className="w-4 h-4 rounded-full bg-primary/20 flex items-center justify-center text-[10px] font-bold text-primary">
                 Unknown App
               </div>
-              <span className="text-xs font-semibold text-foreground">{origin}</span>
             </div>
           </div>
 
