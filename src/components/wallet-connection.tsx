@@ -159,47 +159,62 @@ export function WalletConnection({ onConnect, portalParams }: WalletConnectionPr
   }
 
   return (
-    <div className="flex flex-col items-center justify-center w-full h-full p-4 space-y-4">
-      <div className="space-y-1 relative text-center w-full">
-        <h1 className="text-2xl font-bold">Welcome</h1>
+    <div className="flex flex-col items-center justify-center w-full h-full p-6 space-y-8 animate-in fade-in zoom-in-95 duration-300">
+      <div className="relative">
+        <div className="absolute inset-0 flex items-center">
+          <span className="w-full border-t border-border/60" />
+        </div>
+        <div className="relative flex justify-center text-[11px] uppercase tracking-wider">
+          <span className="bg-background px-3 text-muted-foreground/80 font-medium">
+            Already have an account? Sign in with Passkey
+          </span>
+        </div>
+      </div>
 
-        <div className="w-full space-y-3">
+      <div className="w-full space-y-6">
+        <div className="space-y-3">
           <Button
             onClick={handleSignIn}
             disabled={isLoading}
-            className="w-full h-10 text-sm font-semibold shadow-sm transition-all hover:scale-[1.01] rounded-lg"
+            size="lg"
+            className="w-full h-12 text-base font-medium shadow-md transition-all hover:scale-[1.02] active:scale-[0.98] rounded-xl"
           >
             <Wallet className="w-5 h-5 mr-2" />
             {isLoading ? "Connecting..." : "Sign in"}
-            {!isLoading && <ArrowRight className="w-3.5 h-3.5 ml-2 opacity-80" />}
-
+            {!isLoading && <ArrowRight className="w-4 h-4 ml-2 opacity-70" />}
           </Button>
+        </div>
 
-          <div className="relative py-1">
-            <div className="absolute inset-0 flex items-center">
-              <span className="w-full border-t border-border" />
-            </div>
-            <div className="relative flex justify-center text-[10px] uppercase">
-              <span className="bg-background px-2 text-muted-foreground font-semibold tracking-wide">
-                Or create new account
-              </span>
-            </div>
+        <div className="relative">
+          <div className="absolute inset-0 flex items-center">
+            <span className="w-full border-t border-border/60" />
           </div>
+          <div className="relative flex justify-center text-[11px] uppercase tracking-wider">
+            <span className="bg-background px-3 text-muted-foreground/80 font-medium">
+              New to Solana? Create an account
+            </span>
+          </div>
+        </div>
 
-          <form onSubmit={(e) => { e.preventDefault(); handleSignUp(); }} className="space-y-2">
+        <form onSubmit={(e) => { e.preventDefault(); handleSignUp(); }} className="space-y-3">
+          <div className="space-y-1">
             <Input
               type="text"
-              placeholder="Account Name"
+              placeholder="Enter your account name"
               value={accountName}
               onChange={(e) => setAccountName(e.target.value)}
-              className="h-9 rounded-lg border-input focus-visible:ring-offset-0 focus-visible:ring-1 focus-visible:ring-primary text-sm"
+              className="h-11 rounded-xl border-input/80 bg-muted/30 focus:bg-background focus-visible:ring-offset-0 focus-visible:ring-2 focus-visible:ring-primary/20 text-sm transition-all"
               disabled={isLoading}
             />
-            <Button variant="outline" className="w-full h-9 font-medium rounded-lg border-primary/20 hover:bg-primary/5 hover:text-primary transition-colors text-foreground text-xs" disabled={!accountName || isLoading}>
-              Create account
-            </Button>
-          </form>
-        </div>
+          </div>
+          <Button
+            variant="outline"
+            className="w-full h-11 font-medium rounded-xl border-primary/20 hover:bg-primary/5 hover:text-primary transition-all active:scale-[0.98] text-foreground/90"
+            disabled={!accountName || isLoading}
+          >
+            Create new account
+          </Button>
+        </form>
       </div>
     </div>
   )
