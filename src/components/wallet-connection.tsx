@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Wallet, ArrowRight, ShieldAlert, BadgeCheck } from "lucide-react"
+import { Wallet, ArrowRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { signin, signup } from "../utils/webauthn"
@@ -19,7 +19,6 @@ type VerificationStatus = "loading" | "verified" | "unverified" | "unknown"
 export function WalletConnection({ onConnect, portalParams }: WalletConnectionProps) {
   const [accountName, setAccountName] = useState("")
   const [origin, setOrigin] = useState<string>("https://localhosst:3001")
-  const [status, setStatus] = useState<VerificationStatus>("unknown")
   const [isLoading, setIsLoading] = useState(false)
 
   // Mock API verification function
