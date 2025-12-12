@@ -171,7 +171,7 @@ export async function authenticateWithPasskey(
     );
 
     return {
-      credentialId: credential.id,
+      credentialId: Buffer.from(credential.rawId).toString("base64"),
     };
 
   } catch (error) {
