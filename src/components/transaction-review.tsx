@@ -13,7 +13,7 @@ interface TransactionReviewProps {
   portalParams?: PortalParams | null
 }
 
-export function TransactionReview({ onBack, transactionData, origin = "Unknown App", accountName = "Account 1", portalParams }: TransactionReviewProps) {
+export function TransactionReview({ onBack, transactionData, origin = "Unknown App", accountName = "Default", portalParams }: TransactionReviewProps) {
   const [loading, setLoading] = useState(false)
   const [isSigning, setIsSigning] = useState(false)
   const [simulation, setSimulation] = useState<SimulationResult | null>(null)
