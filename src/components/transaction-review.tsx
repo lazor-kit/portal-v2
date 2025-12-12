@@ -234,7 +234,7 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
             disabled={isSigning}
             className="w-full bg-muted/50 hover:bg-muted text-foreground font-semibold py-2 rounded-lg h-10 text-sm border-border/50"
           >
-            Reject
+            Cancel
           </Button>
           <Button
             onClick={handleApprove}
