@@ -20,7 +20,7 @@ export function WalletConnection({ onConnect, portalParams }: WalletConnectionPr
   const [accountName, setAccountName] = useState("")
   const [origin, setOrigin] = useState<string>("https://localhosst:3001")
   const [isLoading, setIsLoading] = useState(false)
-  const [status, setStatus] = useState<VerificationStatus>("unknown")
+  const [, setStatus] = useState<VerificationStatus>("unknown")
 
   // Mock API verification function
   const verifyDomain = async (domain: string): Promise<boolean> => {
