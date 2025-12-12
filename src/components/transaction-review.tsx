@@ -62,7 +62,7 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
         portalParams.credentialId,
         (msg) => console.log(msg)
       )
-      console.log(signatureData)
+      console.log(origin)
       const responseData = {
         data: signatureData, // Contains normalized signature, r, s, v etc
         credentialId: portalParams.credentialId,
