@@ -117,67 +117,66 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
   if (!simulation && !error) return null;
 
   return (
-    <div className="w-full h-full p-4 flex flex-col">
-      <div className="space-y-4 flex-1">
+    <div className="w-full h-full p-3 flex flex-col">
+      <div className="space-y-3 flex-1">
 
         {/* Header: Origin & Account */}
-        <div className="flex items-center justify-between pb-4 border-b border-border/40">
+        <div className="flex items-center justify-between pb-3 border-b border-border/40">
           <div className="flex flex-col gap-0.5">
             <span className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wide">Requested by</span>
             <div className="flex items-center gap-1.5">
-              <div className="w-5 h-5 rounded-full bg-primary/20 flex items-center justify-center text-[10px] font-bold text-primary">
+              <div className="w-4 h-4 rounded-full bg-primary/20 flex items-center justify-center text-[10px] font-bold text-primary">
                 {origin.charAt(0).toUpperCase()}
               </div>
-              <span className="text-sm font-semibold text-foreground">{origin}</span>
+              <span className="text-xs font-semibold text-foreground">{origin}</span>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 bg-muted/40 px-3 py-1.5 rounded-full border border-border/40">
-            <div className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-[10px] text-white font-bold">
+          <div className="flex items-center gap-2 bg-muted/40 px-2.5 py-1 rounded-full border border-border/40">
+            <div className="w-4 h-4 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-[8px] text-white font-bold">
               {accountName.charAt(0).toUpperCase()}
             </div>
-            <span className="text-xs font-medium text-foreground">{accountName}</span>
+            <span className="text-[10px] font-medium text-foreground">{accountName}</span>
           </div>
         </div>
 
-        <div className="space-y-1 text-center pt-2">
-          <h1 className="text-2xl font-bold text-foreground">Review & Approve</h1>
-          {/* Removed appName from here as it's now in header */}
+        <div className="space-y-0.5 text-center pt-1">
+          <h1 className="text-lg font-bold text-foreground">Review & Approve</h1>
         </div>
 
-        <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-3 flex items-start gap-2">
-          <Info className="w-4 h-4 text-blue-400 flex-shrink-0 mt-0.5" />
-          <p className="text-xs text-blue-300/90">
+        <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-2.5 flex items-start gap-2">
+          <Info className="w-3.5 h-3.5 text-blue-400 flex-shrink-0 mt-0.5" />
+          <p className="text-[10px] text-blue-300/90 leading-tight">
             These amounts are estimated and may change slightly. Always double-check before confirming.
           </p>
         </div>
 
-        <div className="space-y-4">
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground pl-1">What will happen</p>
+        <div className="space-y-3">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground pl-1">What will happen</p>
 
           {error && (
-            <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-4 flex flex-col items-center justify-center text-center gap-2">
-              <div className="w-8 h-8 rounded-full bg-red-500/20 flex items-center justify-center text-red-500">
-                <Info className="w-5 h-5" />
+            <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3 flex flex-col items-center justify-center text-center gap-1">
+              <div className="w-6 h-6 rounded-full bg-red-500/20 flex items-center justify-center text-red-500">
+                <Info className="w-4 h-4" />
               </div>
-              <p className="text-sm font-medium text-red-500">{error}</p>
+              <p className="text-xs font-medium text-red-500">{error}</p>
             </div>
           )}
 
           {simulation?.error && (
-            <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-4 flex flex-col items-center justify-center text-center gap-2">
-              <div className="w-8 h-8 rounded-full bg-red-500/20 flex items-center justify-center text-red-500">
-                <Info className="w-5 h-5" />
+            <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3 flex flex-col items-center justify-center text-center gap-1">
+              <div className="w-6 h-6 rounded-full bg-red-500/20 flex items-center justify-center text-red-500">
+                <Info className="w-4 h-4" />
               </div>
-              <p className="text-sm font-medium text-red-500">{simulation.error}</p>
+              <p className="text-xs font-medium text-red-500">{simulation.error}</p>
             </div>
           )}
 
           {simulation && !simulation.error && (
-            <div className="space-y-3">
-              <div className="bg-muted/40 border border-border/60 rounded-2xl overflow-hidden">
+            <div className="space-y-2">
+              <div className="bg-muted/40 border border-border/60 rounded-xl overflow-hidden">
                 {simulation.balanceChanges.length === 0 && (
-                  <div className="p-4 text-center text-sm text-muted-foreground">
+                  <div className="p-3 text-center text-xs text-muted-foreground">
                     No balance changes detected.
                   </div>
                 )}
@@ -186,15 +185,15 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
                   return (
                     <div
                       key={index}
-                      className={`flex items-center justify-between p-4 ${index !== simulation.balanceChanges.length - 1 ? 'border-b border-border/40' : ''}`}
+                      className={`flex items-center justify-between p-3 ${index !== simulation.balanceChanges.length - 1 ? 'border-b border-border/40' : ''}`}
                     >
                       <div className="flex flex-col gap-0.5">
-                        <span className={`text-sm ${isAction ? 'font-medium text-foreground' : 'text-muted-foreground'}`}>
+                        <span className={`text-xs ${isAction ? 'font-medium text-foreground' : 'text-muted-foreground'}`}>
                           {change.token}
                         </span>
                       </div>
                       <div className={`text-right ${isAction ? 'flex flex-col items-end' : ''}`}>
-                        <span className={`text-base font-semibold ${change.color} tracking-tight`}>
+                        <span className={`text-sm font-semibold ${change.color} tracking-tight`}>
                           {change.amount}
                         </span>
                       </div>
@@ -207,51 +206,45 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
         </div>
 
         {simulation && (
-          <div className="bg-muted/20 border border-border/40 rounded-2xl p-4 space-y-4">
+          <div className="bg-muted/20 border border-border/40 rounded-xl p-3 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">Network</span>
-              <div className="flex items-center gap-2 bg-green-500/10 px-2 py-1 rounded-full border border-green-500/20">
+              <span className="text-xs text-muted-foreground">Network</span>
+              <div className="flex items-center gap-1.5 bg-green-500/10 px-2 py-0.5 rounded-full border border-green-500/20">
                 <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
-                <span className="text-xs font-medium text-green-600">{simulation.network}</span>
+                <span className="text-[10px] font-medium text-green-600">{simulation.network}</span>
               </div>
             </div>
 
             <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">Network Fee</span>
+              <span className="text-xs text-muted-foreground">Network Fee</span>
               <div className="text-right flex flex-col items-end">
-                <span className="text-sm font-medium text-foreground">{simulation.networkFee}</span>
-                <span className="text-[10px] text-muted-foreground bg-muted px-1.5 rounded text-center min-w-[50px]">
+                <span className="text-xs font-medium text-foreground">{simulation.networkFee}</span>
+                <span className="text-[10px] text-muted-foreground bg-muted px-1 rounded text-center min-w-[40px]">
                   {simulation.networkFeeUSD}
                 </span>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">Auto-approve</span>
-              <div className="flex items-center gap-1.5 text-foreground">
-                <span className="text-sm font-medium">{simulation.autoConfirm}</span>
               </div>
             </div>
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-3 pt-2">
+        <div className="grid grid-cols-2 gap-2 pt-1">
           <Button
             variant="outline"
             onClick={handleReject}
             disabled={isSigning}
-            className="w-full bg-muted/50 hover:bg-muted text-foreground font-semibold py-2.5 rounded-xl h-12 text-base border-border/50"
+            className="w-full bg-muted/50 hover:bg-muted text-foreground font-semibold py-2 rounded-lg h-10 text-sm border-border/50"
           >
             Reject
           </Button>
           <Button
             onClick={handleApprove}
+            variant="positive"
             disabled={isSigning || !!error || (simulation?.error ? true : false)}
-            className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-semibold py-2.5 rounded-xl h-12 text-base"
+            className="w-full font-semibold py-2 rounded-lg h-10 text-sm"
           >
             {isSigning ? (
               <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
                 Signing...
               </>
             ) : "Approve"}

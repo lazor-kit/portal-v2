@@ -37,42 +37,118 @@
     --sidebar-accent-foreground: oklch(0.205 0 0);
     --sidebar-border: oklch(0.922 0 0);
     --sidebar-ring: oklch(0.708 0 0);
+
+    /* Porto Theme Props (Light) */
+    --background-color-th_primary: #0090ff;
+    --text-color-th_primary: #ffffff;
+    --border-color-th_primary: #0090ff;
+
+    --background-color-th_secondary: #e8e8e8;
+    --text-color-th_secondary: #202020;
+    --border-color-th_secondary: #e8e8e8;
+
+    --background-color-th_positive: #30a46c;
+    --text-color-th_positive: #ffffff;
+    --border-color-th_positive: #30a46c;
+
+    --background-color-th_negative: #dc3e42;
+    --text-color-th_negative: #ffffff;
+    --border-color-th_negative: #dc3e42;
+
+    --background-color-th_negative-secondary: #fcd8da;
+    --text-color-th_negative-secondary: #e5484d;
+    --border-color-th_negative-secondary: #fcd8da;
+
+    /* Strong example */
+    --background-color-th_strong: #000000;
+    --text-color-th_strong: #ffffff;
+    --border-color-th_strong: #000000;
+
+    /* Warning example */
+    --background-color-th_warning: #e2a336;
+    --text-color-th_warning: #ffffff;
+    --border-color-th_warning: #e2a336;
+
+    /* Radii */
+    --radius-th_small: 5px;
+    --radius-th_medium: 8px;
+    --radius-th_large: 14px;
+
+    /* Typography */
+    --font-sans: "Inter", sans-serif;
+    --text-base: 15px;
+    --text-base--line-height: 1.325;
 }
 
 .dark {
-    /* Updated to Porto dark theme with blue primary */
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.18 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.18 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.54 0.21 264);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.25 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.25 0 0);
-    --muted-foreground: oklch(0.7 0 0);
-    --accent: oklch(0.54 0.21 264);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.62 0.22 29);
-    --destructive-foreground: oklch(0.985 0 0);
-    --border: oklch(0.25 0 0);
-    --input: oklch(0.2 0 0);
-    --ring: oklch(0.54 0.21 264);
+    /* Refined dark theme (Porto Default) */
+    --background: #191919;
+    --foreground: #eeeeee;
+    --card: #191919;
+    --card-foreground: #eeeeee;
+    --popover: #191919;
+    --popover-foreground: #eeeeee;
+    --primary: #0090ff;
+    --primary-foreground: #ffffff;
+    --secondary: #2a2a2a;
+    --secondary-foreground: #eeeeee;
+    --muted: #2a2a2a;
+    --muted-foreground: #eeeeee;
+    /* Approximate/Standard */
+    --accent: #3b9eff;
+    /* Porto Dark Accent */
+    --accent-foreground: #ffffff;
+    --destructive: #8f6424;
+    /* Porto Dark Negative */
+    --destructive-foreground: #ffffff;
+    --border: #2a2a2a;
+    /* Porto Dark Secondary Border */
+    --input: #2a2a2a;
+    --ring: #0090ff;
     --chart-1: oklch(0.488 0.243 264.376);
     --chart-2: oklch(0.696 0.17 162.48);
     --chart-3: oklch(0.769 0.188 70.08);
     --chart-4: oklch(0.627 0.265 303.9);
     --chart-5: oklch(0.645 0.246 16.439);
-    --sidebar: oklch(0.18 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.54 0.21 264);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.25 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(0.25 0 0);
-    --sidebar-ring: oklch(0.54 0.21 264);
+    --sidebar: #191919;
+    --sidebar-foreground: #eeeeee;
+    --sidebar-primary: #0090ff;
+    --sidebar-primary-foreground: #ffffff;
+    --sidebar-accent: #2a2a2a;
+    --sidebar-accent-foreground: #eeeeee;
+    --sidebar-border: #2a2a2a;
+    --sidebar-ring: #0090ff;
+
+    /* Porto Theme Props (Dark) */
+    --background-color-th_primary: #0090ff;
+    --text-color-th_primary: #ffffff;
+    --border-color-th_primary: #0090ff;
+
+    --background-color-th_secondary: #2a2a2a;
+    --text-color-th_secondary: #eeeeee;
+    --border-color-th_secondary: #2a2a2a;
+
+    --background-color-th_positive: #30a46c;
+    --text-color-th_positive: #ffffff;
+    --border-color-th_positive: #30a46c;
+
+    --background-color-th_negative: #8f6424;
+    --text-color-th_negative: #ffffff;
+    --border-color-th_negative: #8f6424;
+
+    --background-color-th_negative-secondary: #500f1c;
+    --text-color-th_negative-secondary: #e5484d;
+    --border-color-th_negative-secondary: #500f1c;
+
+    /* Strong example (Assuming white for dark mode strong) */
+    --background-color-th_strong: #ffffff;
+    --text-color-th_strong: #000000;
+    --border-color-th_strong: #ffffff;
+
+    /* Warning example */
+    --background-color-th_warning: #8f6424;
+    --text-color-th_warning: #ffffff;
+    --border-color-th_warning: #8f6424;
 }
 
 @theme inline {
@@ -114,6 +190,28 @@
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-ring: var(--sidebar-ring);
+    --animate-accordion-down: accordion-down 0.2s ease-out;
+    --animate-accordion-up: accordion-up 0.2s ease-out;
+
+    @keyframes accordion-down {
+        from {
+            height: 0;
+        }
+
+        to {
+            height: var(--radix-accordion-content-height);
+        }
+    }
+
+    @keyframes accordion-up {
+        from {
+            height: var(--radix-accordion-content-height);
+        }
+
+        to {
+            height: 0;
+        }
+    }
 }
 
 @layer base {
@@ -123,5 +221,8 @@
 
     body {
         @apply bg-background text-foreground;
+        font-family: var(--font-sans);
+        font-size: var(--text-base);
+        line-height: var(--text-base--line-height);
     }
 }

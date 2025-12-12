@@ -9,24 +9,34 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: 'bg-primary text-primary-foreground hover:bg-primary/90',
-        destructive:
-          'bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60',
-        outline:
-          'border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:bg-input/30 dark:border-input dark:hover:bg-input/50',
-        secondary:
-          'bg-secondary text-secondary-foreground hover:bg-secondary/80',
-        ghost:
-          'hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50',
+        default: 'bg-[var(--background-color-th_primary)] text-[var(--text-color-th_primary)] border border-[var(--border-color-th_primary)] hover:opacity-90',
+        primary: 'bg-[var(--background-color-th_primary)] text-[var(--text-color-th_primary)] border border-[var(--border-color-th_primary)] hover:opacity-90',
+        secondary: 'bg-[var(--background-color-th_secondary)] text-[var(--text-color-th_secondary)] border border-[var(--border-color-th_secondary)] hover:opacity-90',
+        distinct: 'bg-[var(--background-color-th_primary)] text-[var(--text-color-th_primary)] border border-[var(--border-color-th_primary)] hover:opacity-90', // Example mapping
+        positive: 'bg-[var(--background-color-th_positive)] text-[var(--text-color-th_positive)] border border-[var(--border-color-th_positive)] hover:opacity-90',
+        negative: 'bg-[var(--background-color-th_negative)] text-[var(--text-color-th_negative)] border border-[var(--border-color-th_negative)] hover:opacity-90',
+        'negative-secondary': 'bg-[var(--background-color-th_negative-secondary)] text-[var(--text-color-th_negative-secondary)] border border-[var(--border-color-th_negative-secondary)] hover:opacity-90',
+        strong: 'bg-[var(--background-color-th_strong)] text-[var(--text-color-th_strong)] border border-[var(--border-color-th_strong)] hover:opacity-90',
+        warning: 'bg-[var(--background-color-th_warning)] text-[var(--text-color-th_warning)] border border-[var(--border-color-th_warning)] hover:opacity-90',
+        content: 'bg-transparent text-foreground hover:bg-accent hover:text-accent-foreground',
+
+        // Backward compatibility mappings
+        destructive: 'bg-[var(--background-color-th_negative)] text-[var(--text-color-th_negative)] border border-[var(--border-color-th_negative)] hover:opacity-90',
+        outline: 'border border-[var(--border-color-th_secondary)] bg-transparent hover:bg-[var(--background-color-th_secondary)] hover:text-[var(--text-color-th_secondary)]',
+        ghost: 'hover:bg-accent hover:text-accent-foreground',
         link: 'text-primary underline-offset-4 hover:underline',
+        success: 'bg-[var(--background-color-th_positive)] text-[var(--text-color-th_positive)] border border-[var(--border-color-th_positive)] hover:opacity-90',
       },
       size: {
-        default: 'h-9 px-4 py-2 has-[>svg]:px-3',
-        sm: 'h-8 rounded-md gap-1.5 px-3 has-[>svg]:px-2.5',
-        lg: 'h-10 rounded-md px-6 has-[>svg]:px-4',
-        icon: 'size-9',
-        'icon-sm': 'size-8',
-        'icon-lg': 'size-10',
+        default: 'h-[38px] px-4 rounded-[8px] text-[15px]', // Medium (8px)
+        medium: 'h-[38px] px-4 rounded-[8px] text-[15px]',
+        sm: 'h-[28px] px-2 rounded-[5px] text-[13px]', // Small (5px)
+        small: 'h-[28px] px-2 rounded-[5px] text-[13px]',
+        lg: 'h-[42px] px-5 rounded-[14px] text-[16px]', // Large (14px)
+        large: 'h-[42px] px-5 rounded-[14px] text-[16px]',
+        icon: 'h-[38px] w-[38px] rounded-[8px]',
+        'icon-sm': 'h-[28px] w-[28px] rounded-[5px]',
+        'icon-lg': 'h-[42px] w-[42px] rounded-[14px]',
       },
     },
     defaultVariants: {

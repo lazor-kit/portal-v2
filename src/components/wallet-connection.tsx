@@ -159,49 +159,48 @@ export function WalletConnection({ onConnect, portalParams }: WalletConnectionPr
   }
 
   return (
-    <div className="flex flex-col items-center justify-center w-full h-full p-6 space-y-6">
+    <div className="flex flex-col items-center justify-center w-full h-full p-4 space-y-4">
       <div className="space-y-1 relative text-center w-full">
         <h1 className="text-2xl font-bold">Welcome</h1>
-      </div>
 
-      <div className="w-full space-y-4">
-        <Button
-          onClick={handleSignIn}
-          disabled={isLoading}
-          size="lg"
-          className="w-full h-14 text-base font-semibold shadow-sm transition-all hover:scale-[1.01] rounded-xl"
-        >
-          <Wallet className="w-5 h-5 mr-2" />
-          {isLoading ? "Connecting..." : "Sign in"}
-          {!isLoading && <ArrowRight className="w-4 h-4 ml-2 opacity-80" />}
-        </Button>
-
-        <div className="relative py-2">
-          <div className="absolute inset-0 flex items-center">
-            <span className="w-full border-t border-border" />
-          </div>
-          <div className="relative flex justify-center text-xs uppercase">
-            <span className="bg-background px-2 text-muted-foreground font-semibold tracking-wide">
-              Or create new account
-            </span>
-          </div>
-        </div>
-
-        <form onSubmit={(e) => { e.preventDefault(); handleSignUp(); }} className="space-y-3">
-          <Input
-            type="text"
-            placeholder="Account Name"
-            value={accountName}
-            onChange={(e) => setAccountName(e.target.value)}
-            className="h-12 rounded-xl border-input focus-visible:ring-offset-0 focus-visible:ring-1 focus-visible:ring-primary"
+        <div className="w-full space-y-3">
+          <Button
+            onClick={handleSignIn}
             disabled={isLoading}
-          />
-          <Button variant="outline" className="w-full h-12 font-medium rounded-xl border-primary/20 hover:bg-primary/5 hover:text-primary transition-colors text-foreground" disabled={!accountName || isLoading}>
-            Create account
+            className="w-full h-10 text-sm font-semibold shadow-sm transition-all hover:scale-[1.01] rounded-lg"
+          >
+            <Wallet className="w-5 h-5 mr-2" />
+            {isLoading ? "Connecting..." : "Sign in"}
+            {!isLoading && <ArrowRight className="w-3.5 h-3.5 ml-2 opacity-80" />}
+
           </Button>
-        </form>
+
+          <div className="relative py-1">
+            <div className="absolute inset-0 flex items-center">
+              <span className="w-full border-t border-border" />
+            </div>
+            <div className="relative flex justify-center text-[10px] uppercase">
+              <span className="bg-background px-2 text-muted-foreground font-semibold tracking-wide">
+                Or create new account
+              </span>
+            </div>
+          </div>
+
+          <form onSubmit={(e) => { e.preventDefault(); handleSignUp(); }} className="space-y-2">
+            <Input
+              type="text"
+              placeholder="Account Name"
+              value={accountName}
+              onChange={(e) => setAccountName(e.target.value)}
+              className="h-9 rounded-lg border-input focus-visible:ring-offset-0 focus-visible:ring-1 focus-visible:ring-primary text-sm"
+              disabled={isLoading}
+            />
+            <Button variant="outline" className="w-full h-9 font-medium rounded-lg border-primary/20 hover:bg-primary/5 hover:text-primary transition-colors text-foreground text-xs" disabled={!accountName || isLoading}>
+              Create account
+            </Button>
+          </form>
+        </div>
       </div>
-    </div>
-  )
+      )
 }
 
