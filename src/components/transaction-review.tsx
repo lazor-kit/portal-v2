@@ -140,12 +140,12 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
         </div>
 
         <div className="space-y-0.5 text-center pt-1">
-          <h1 className="text-lg font-bold text-foreground">Review & Approve</h1>
+          <h1 className="text-lg font-bold text-foreground">Review and Approve Transaction</h1>
         </div>
 
         <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-2.5 flex items-start gap-2">
           <Info className="w-3.5 h-3.5 text-blue-400 flex-shrink-0 mt-0.5" />
-          <p className="text-[13px] text-blue-300/90 leading-tight">
+          <p className="text-[11px] text-blue-300/90 leading-tight">
             These amounts are estimated and may change slightly. Always double-check before confirming.
           </p>
         </div>
