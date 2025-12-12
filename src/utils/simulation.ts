@@ -247,17 +247,36 @@ export async function simulateTransaction(base64Tx: string): Promise<SimulationR
 
         // Helper to format amount with decimals
         const formatTokenAmount = (amount: bigint, mint: string): string => {
-            const decimals = mintDecimals.get(mint) ?? 0; // Default to 0 if unknown (Raw)
-            if (decimals === 0) return amount.toString();
+            const decimals = mintDecimals.get(mint) ?? 0;
+
+            // If decimals are 0, just format the BigInt with commas
+            if (decimals === 0) {
+                return amount.toLocaleString('en-US');
+            }
 
             const divisor = BigInt(10 ** decimals);
             const integerPart = amount / divisor;
             const fractionalPart = amount % divisor;
 
+            const integerStr = integerPart.toLocaleString('en-US');
+
+            if (fractionalPart === BigInt(0)) {
+                return integerStr;
+            }
+
             let fracStr = fractionalPart.toString().padStart(decimals, '0');
             fracStr = fracStr.replace(/0+$/, ''); // Trim trailing zeros
 
-            return `${integerPart}${fracStr ? '.' + fracStr : ''}`;
+            return `${integerStr}.${fracStr}`;
+        };
+
+        const formatSOL = (solAmount: number): string => {
+            // Max 9 decimals for SOL, but trim trailing zeros
+            // Use Intl for separators if number is large enough (though mostly small for fees/transfers)
+            return new Intl.NumberFormat('en-US', {
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 9,
+            }).format(solAmount);
         };
 
         if (transaction instanceof VersionedTransaction) {
@@ -308,10 +327,10 @@ export async function simulateTransaction(base64Tx: string): Promise<SimulationR
                     const color = diffLamports > 0 ? "text-green-400" : "text-red-400";
 
                     // Only show significant changes or if it's the user
-                    if (Math.abs(diffSol) > 0.000001 || isUser) {
+                    if (Math.abs(diffSol) > 0.000000001 || isUser) {
                         balanceChanges.push({
                             token: "SOL",
-                            amount: `${sign}${diffSol.toFixed(9)}`,
+                            amount: `${sign}${formatSOL(Math.abs(diffSol))}`,
                             color
                         });
                     }
@@ -438,7 +457,7 @@ export async function simulateTransaction(base64Tx: string): Promise<SimulationR
                             balanceChanges.length = 0;
                             balanceChanges.push({
                                 token: `Sent to ${destPubkey.toBase58().slice(0, 4)}...${destPubkey.toBase58().slice(-4)}`,
-                                amount: `-${amountSol.toFixed(9)} SOL`,
+                                amount: `-${formatSOL(amountSol)} SOL`,
                                 color: "text-gray-400"
                             });
                             break;
@@ -485,7 +504,9 @@ export async function simulateTransaction(base64Tx: string): Promise<SimulationR
 
                         let fracStr = fractionalPart.toString().padStart(decimals, '0');
                         fracStr = fracStr.replace(/0+$/, '');
-                        const amountStr = `${integerPart}${fracStr ? '.' + fracStr : ''}`;
+
+                        const integerStr = integerPart.toLocaleString('en-US');
+                        const amountStr = `${integerStr}${fracStr ? '.' + fracStr : ''}`;
 
                         // Detect Symbol? (Hard without external API, but for USDC/USDT we can hardcode common ones)
                         let symbol = "Token";
