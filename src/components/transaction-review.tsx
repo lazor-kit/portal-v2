@@ -122,7 +122,7 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
 
         {/* Header: Title & Account */}
         <div className="flex items-center justify-between pb-3 border-b border-border/40">
-          <h1 className="text-base font-bold text-foreground">Review Request</h1>
+          <h1 className="text-base font-bold text-foreground">Review Transaction</h1>
           <div className="flex items-center gap-2 bg-muted/40 px-3 py-1.5 rounded-full border border-border/40">
             <span className="text-[10px] text-muted-foreground font-medium">Account:</span>
             <div className="w-4 h-4 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-[8px] text-white font-bold">

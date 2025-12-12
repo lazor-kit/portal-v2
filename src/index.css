@@ -75,7 +75,7 @@
     --radius-th_large: 14px;
 
     /* Typography */
-    --font-sans: "Inter", sans-serif;
+    --font-sans: "Roboto Flex", sans-serif;
     --text-base: 15px;
     --text-base--line-height: 1.325;
 }
