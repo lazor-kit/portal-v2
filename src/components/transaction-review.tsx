@@ -22,6 +22,7 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
   useEffect(() => {
     const loadSimulation = async () => {
       console.log(transactionData)
+      console.log(accountName)
       // If no data is provided, use a default dummy string to trigger the mock
       // If no data is provided, use a default dummy string to trigger the mock
       const txData = transactionData || "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAIBAQVe+l8gwL9mYKXPGt7BhrNDo+e6Kgmq9isJ4mxR1i0VhutGBraNNpL7dwMmlnQ+QwGIAegmtj+6XBrWt+bK22TymouJT/dEn1YT7x6y1kaHE6T7iHNZt21x0BI+rV69jtEo/vwN3rsYqMbpDdLkPsp5PizbLAS07XOCsW5vtjlGbQbd9uHXZaGT2cvhRs7reawctIXtX1s3kTqM9YV+/wCpZ78YJUnjZJdcuM60j0xjKVSRZBgzfzZcH1XmiQAZoHkBBAMCAwEJA+gDAAAAAAAAAA=="
