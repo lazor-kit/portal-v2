@@ -1,6 +1,14 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+@layer base {
+
+    html,
+    body {
+        font-family: var(--font-sans);
+    }
+}
+
 @custom-variant dark (&:is(.dark *));
 
 :root {
