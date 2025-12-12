@@ -201,6 +201,7 @@ export function WalletConnection({ onConnect, portalParams }: WalletConnectionPr
           </form>
         </div>
       </div>
-      )
+    </div>
+  )
 }
 
