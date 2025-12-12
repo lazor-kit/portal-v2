@@ -120,9 +120,9 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
     <div className="w-full h-full p-3 flex flex-col">
       <div className="space-y-3 flex-1">
 
-        {/* Header: Origin & Account */}
-        {/* Header: Account Only (Right Aligned) */}
-        <div className="flex items-center justify-end pb-3 border-b border-border/40">
+        {/* Header: Title & Account */}
+        <div className="flex items-center justify-between pb-3 border-b border-border/40">
+          <h1 className="text-base font-bold text-foreground">Review Request</h1>
           <div className="flex items-center gap-2 bg-muted/40 px-3 py-1.5 rounded-full border border-border/40">
             <span className="text-[10px] text-muted-foreground font-medium">Account:</span>
             <div className="w-4 h-4 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-[8px] text-white font-bold">
@@ -132,9 +132,7 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
           </div>
         </div>
 
-        <div className="space-y-0.5 text-center pt-1">
-          <h1 className="text-lg font-bold text-foreground">Review and Approve Transaction</h1>
-        </div>
+
 
         <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-2.5 flex items-start gap-2">
           <Info className="w-3.5 h-3.5 text-blue-400 flex-shrink-0 mt-0.5" />
