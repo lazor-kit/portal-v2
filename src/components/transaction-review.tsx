@@ -46,7 +46,17 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
         const result = await simulateTransaction(txData, cluster)
         setSimulation(result)
       } catch (error) {
-        setError("Failed to simulate transaction")
+        // Treat as simulation error (warning), not app error
+        setSimulation({
+          appName: "Application",
+          balanceChanges: [],
+          network: "Unknown",
+          networkFee: "Unknown",
+          networkFeeUSD: "Unknown",
+          autoConfirm: "Off",
+          chainId: "unknown",
+          error: "Failed to simulate transaction: " + (error as Error).message
+        })
       } finally {
         setLoading(false)
       }
@@ -171,11 +181,12 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
           )}
 
           {simulation?.error && (
-            <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3 flex flex-col items-center justify-center text-center gap-1">
-              <div className="w-6 h-6 rounded-full bg-red-500/20 flex items-center justify-center text-red-500">
+            <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-3 flex flex-col items-center justify-center text-center gap-1">
+              <div className="w-6 h-6 rounded-full bg-yellow-500/20 flex items-center justify-center text-yellow-500">
                 <Info className="w-4 h-4" />
               </div>
-              <p className="text-xs font-medium text-red-500">{simulation.error}</p>
+              <p className="text-xs font-medium text-yellow-500">{simulation.error}</p>
+              <p className="text-[10px] text-yellow-500/80">You can still approve this transaction at your own risk.</p>
             </div>
           )}
 
@@ -263,7 +274,7 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
           <Button
             onClick={handleApprove}
             variant="default"
-            disabled={isSigning || !!error || (simulation?.error ? true : false)}
+            disabled={isSigning || !!error}
             className="w-full font-semibold py-2 rounded-lg h-10 text-sm"
           >
             {isSigning ? (
