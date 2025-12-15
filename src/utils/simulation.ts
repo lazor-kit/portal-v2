@@ -27,7 +27,7 @@ export interface SimulationResult {
 }
 
 // Default RPC endpoint - in production this should be an env var
-const RPC_ENDPOINT = "https://mainnet.helius-rpc.com/?api-key=47712b7a-ea63-49b8-9685-dff77d9eb55a";
+const RPC_ENDPOINT = "https://api.devnet.solana.com/";
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 
