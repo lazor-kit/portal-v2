@@ -13,6 +13,7 @@ export interface PortalParams {
     credentialId: string | null
     accountName: string | null
     transaction: string | null
+    clusterSimulation: string | null
 }
 
 export interface PortalResponse {
@@ -52,7 +53,7 @@ export class PortalCommunicator {
 
     static getParams(): PortalParams {
         if (typeof window === "undefined") {
-            return { action: 'unknown', message: '', autoConnect: false, autoSign: false, expoParam: null, redirectUrl: null, credentialId: null, accountName: null, transaction: null }
+            return { action: 'unknown', message: '', autoConnect: false, autoSign: false, expoParam: null, redirectUrl: null, credentialId: null, accountName: null, transaction: null, clusterSimulation: null }
         }
         const urlParams = new URLSearchParams(window.location.search)
         const actionParam = urlParams.get('action')
@@ -70,7 +71,8 @@ export class PortalCommunicator {
             redirectUrl: urlParams.get('redirectUrl') || urlParams.get('redirect_url') || null,
             credentialId: urlParams.get('credentialId') || null,
             accountName: urlParams.get('accountName') || null,
-            transaction: urlParams.get('transaction') || null
+            transaction: urlParams.get('transaction') || null,
+            clusterSimulation: urlParams.get('clusterSimulation') || null
         }
     }
 

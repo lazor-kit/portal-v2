@@ -58,15 +58,6 @@ function processPublicKey(pubkeyBuffer: ArrayBuffer): string {
 
 function handleWebAuthnError(error: unknown, operation: string, displayStatus: (message: string, type: string) => void): never {
   const errorMessage = error instanceof Error ? error.message : String(error);
-  const errorName = error instanceof Error ? error.name : 'UnknownError';
-  const { isCustomTabs } = getWebAuthnEnvironment();
-
-  console.error(`❌ ${operation} failed:`, {
-    error: errorName,
-    message: errorMessage,
-    environment: isCustomTabs ? 'Custom Tabs' : 'Regular Browser'
-  });
-
   displayStatus(`${operation} failed: ${errorMessage}`, "error");
   throw error;
 }
@@ -124,13 +115,7 @@ export async function signup(
     // Save to storage
     localStorage.setItem(CREDENTIAL_STORAGE_KEYS.id, credentialId);
     localStorage.setItem(CREDENTIAL_STORAGE_KEYS.publicKey, compressedKey);
-
     displayStatus("Account created successfully!", "success");
-    console.log('✅ Passkey created successfully:', {
-      credentialId: credentialId.substring(0, 16) + '...',
-      environment: isCustomTabs ? 'Custom Tabs' : 'Regular Browser',
-    });
-
     return { credentialId, publickey: compressedKey, status: "created" };
 
   } catch (error) {
@@ -233,6 +218,4 @@ export async function signMessage(
   }
 }
 
-// Map signUp to existing export for compatibility if needed
 export const signUp = signup;
-// Removed duplicate signIn function in favor of signin alias to authenticateWithPasskey

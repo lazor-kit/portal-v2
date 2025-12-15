@@ -51,7 +51,6 @@ export function WalletConnection({ onConnect, portalParams }: WalletConnectionPr
       if (!domain) return
 
       // Log origin as requested
-      console.log("Received message from origin:", domain)
       setOrigin(domain)
       setStatus("loading")
 

@@ -21,17 +21,31 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
 
   useEffect(() => {
     const loadSimulation = async () => {
-      console.log(transactionData)
+      console.log(origin)
       console.log(accountName)
-      // If no data is provided, use a default dummy string to trigger the mock
+      console.log(portalParams)
+      // Check if this is a plain message signing (no transaction param)
+      if (portalParams && !portalParams.transaction && portalParams.message) {
+        setSimulation({
+          appName: "Message Signing",
+          balanceChanges: [],
+          network: "Off-chain",
+          networkFee: "0",
+          networkFeeUSD: "$0.00",
+          autoConfirm: "N/A",
+          chainId: "N/A"
+        })
+        return;
+      }
+
       // If no data is provided, use a default dummy string to trigger the mock
       const txData = transactionData || "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAIBAQVe+l8gwL9mYKXPGt7BhrNDo+e6Kgmq9isJ4mxR1i0VhutGBraNNpL7dwMmlnQ+QwGIAegmtj+6XBrWt+bK22TymouJT/dEn1YT7x6y1kaHE6T7iHNZt21x0BI+rV69jtEo/vwN3rsYqMbpDdLkPsp5PizbLAS07XOCsW5vtjlGbQbd9uHXZaGT2cvhRs7reawctIXtX1s3kTqM9YV+/wCpZ78YJUnjZJdcuM60j0xjKVSRZBgzfzZcH1XmiQAZoHkBBAMCAwEJA+gDAAAAAAAAAA=="
       setLoading(true)
       try {
-        const result = await simulateTransaction(txData)
+        const cluster = portalParams?.clusterSimulation || 'devnet';
+        const result = await simulateTransaction(txData, cluster)
         setSimulation(result)
       } catch (error) {
-        console.error("Simulation failed", error)
         setError("Failed to simulate transaction")
       } finally {
         setLoading(false)
@@ -39,13 +53,14 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
     }
 
     loadSimulation()
-  }, [transactionData])
+  }, [transactionData, portalParams]) // Added portalParams dependency
 
   const handleApprove = async () => {
     if (!portalParams?.credentialId) {
       setError("Missing credential ID for signing")
       return
     }
+    // For plain message, transactionData is the message
     if (!transactionData) {
       setError("No transaction data to sign")
       return
@@ -56,14 +71,11 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
 
     try {
       // Sign the transaction message (base64)
-      // Note: webauthn.signMessage usually expects a message string. 
-      // If it's a transaction, passing the base64 string is typical for this flow.
       const signatureData = await signMessage(
-        portalParams.message,
+        portalParams.message, // This should be the message or tx
         portalParams.credentialId,
         (msg) => console.log(msg)
       )
-      console.log(origin)
       const responseData = {
         data: signatureData, // Contains normalized signature, r, s, v etc
         credentialId: portalParams.credentialId,
@@ -117,13 +129,20 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
   // Fallback if simulation failed or hasn't loaded
   if (!simulation && !error) return null;
 
+  // Filter balance changes for UI (Show first and last if > 2)
+  const displayChanges = simulation && simulation.balanceChanges.length > 2
+    ? [simulation.balanceChanges[0], simulation.balanceChanges[simulation.balanceChanges.length - 1]]
+    : simulation?.balanceChanges || [];
+
   return (
     <div className="w-full h-full p-3 flex flex-col">
       <div className="space-y-3 flex-1">
 
         {/* Header: Title & Account */}
         <div className="flex items-center justify-between pb-3 border-b border-border/40">
-          <h1 className="text-base font-bold text-foreground">Review Transaction</h1>
+          <h1 className="text-base font-bold text-foreground">
+            {portalParams && !portalParams.transaction && portalParams.message ? "Review Message" : "Review Transaction"}
+          </h1>
           <div className="flex items-center gap-2 bg-muted/40 px-3 py-1.5 rounded-full border border-border/40">
             <span className="text-[10px] text-muted-foreground font-medium">Account:</span>
             <span className="text-[10px] font-medium text-foreground">Default</span>
@@ -163,31 +182,48 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
           {simulation && !simulation.error && (
             <div className="space-y-2">
               <div className="bg-muted/40 border border-border/60 rounded-xl overflow-hidden">
-                {simulation.balanceChanges.length === 0 && (
-                  <div className="p-3 text-center text-xs text-muted-foreground">
-                    No balance changes detected.
+                {portalParams && !portalParams.transaction && portalParams.message ? (
+                  <div className="p-3">
+                    <p className="text-xs font-mono break-all text-muted-foreground bg-muted/50 p-2 rounded">
+                      {portalParams.message}
+                    </p>
                   </div>
+                ) : (
+                  <>
+                    {displayChanges.length === 0 && (
+                      <div className="p-3 text-center text-xs text-muted-foreground">
+                        No balance changes detected.
+                      </div>
+                    )}
+                    {displayChanges.map((change, index) => {
+                      const isAction = change.token.startsWith("Sent to");
+                      return (
+                        <div
+                          key={index}
+                          className={`flex items-center justify-between p-3 ${index !== displayChanges.length - 1 ? 'border-b border-border/40' : ''}`}
+                        >
+                          <div className="flex flex-col gap-0.5">
+                            <span className={`text-xs ${isAction ? 'font-medium text-foreground' : 'text-muted-foreground'}`}>
+                              {change.token}
+                            </span>
+                          </div>
+                          <div className={`text-right ${isAction ? 'flex flex-col items-end' : ''}`}>
+                            <span className={`text-sm font-semibold ${change.color} tracking-tight`}>
+                              {change.amount}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {(simulation.balanceChanges.length > 2) && (
+                      <div className="p-1.5 text-center bg-muted/20 border-t border-border/40">
+                        <p className="text-[10px] text-muted-foreground italic">
+                          + {simulation.balanceChanges.length - 2} intermediate changes hidden
+                        </p>
+                      </div>
+                    )}
+                  </>
                 )}
-                {simulation.balanceChanges.map((change, index) => {
-                  const isAction = change.token.startsWith("Sent to");
-                  return (
-                    <div
-                      key={index}
-                      className={`flex items-center justify-between p-3 ${index !== simulation.balanceChanges.length - 1 ? 'border-b border-border/40' : ''}`}
-                    >
-                      <div className="flex flex-col gap-0.5">
-                        <span className={`text-xs ${isAction ? 'font-medium text-foreground' : 'text-muted-foreground'}`}>
-                          {change.token}
-                        </span>
-                      </div>
-                      <div className={`text-right ${isAction ? 'flex flex-col items-end' : ''}`}>
-                        <span className={`text-sm font-semibold ${change.color} tracking-tight`}>
-                          {change.amount}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
               </div>
             </div>
           )}
