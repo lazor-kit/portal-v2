@@ -186,7 +186,7 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
                 <Info className="w-4 h-4" />
               </div>
               <p className="text-xs font-medium text-yellow-500">{simulation.error}</p>
-              <p className="text-[10px] text-yellow-500/80">You can still approve this transaction at your own risk.</p>
+              <p className="text-[10px] text-yellow-500/80">Simulation failed. This transaction may fail if submitted.</p>
             </div>
           )}
 
