@@ -567,11 +567,11 @@ export async function simulateTransaction(base64Tx: string, cluster: string = 'd
     return {
         appName: "Application",
         balanceChanges: balanceChanges.length > 0 ? balanceChanges : [],
-        network: "Solana Mainnet",
+        network: cluster === 'mainnet' ? "Solana Mainnet" : "Solana Devnet",
         networkFee,
-        networkFeeUSD: "~$0.01",
+        networkFeeUSD: cluster === 'mainnet' ? "~$0.01" : "$0.00",
         autoConfirm: "Off",
-        chainId: "mainnet-beta",
+        chainId: cluster === 'mainnet' ? "mainnet-beta" : "devnet",
         error: errorMsg
     };
 }
