@@ -72,6 +72,21 @@ function getMessageOffset(buffer: Buffer): number {
 }
 
 /**
+ * Helper to fetch SOL price from CoinGecko
+ */
+async function getSolPrice(): Promise<number> {
+    try {
+        const response = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd");
+        if (!response.ok) return 0;
+        const data = await response.json();
+        return data.solana?.usd || 0;
+    } catch (e) {
+        console.warn("Failed to fetch SOL price", e);
+        return 0;
+    }
+}
+
+/**
  * Simulates a transaction to determine balance changes and metadata.
  */
 export async function simulateTransaction(base64Tx: string, cluster: string = 'devnet'): Promise<SimulationResult> {
@@ -208,7 +223,8 @@ export async function simulateTransaction(base64Tx: string, cluster: string = 'd
                 } else {
                     numSigs = (transaction as Transaction).signatures.length;
                 }
-                networkFee = `${(numSigs * 0.000005).toFixed(6)} SOL`;
+                const feeInSol = numSigs * 0.000005;
+                networkFee = `${feeInSol.toFixed(6)} SOL`;
             }
         }
 
@@ -564,12 +580,29 @@ export async function simulateTransaction(base64Tx: string, cluster: string = 'd
         }
     }
 
+    let networkFeeUSD = "$0.00";
+    if (cluster === 'mainnet') {
+        // Calculate fee in USD
+        const feeInSol = parseFloat(networkFee.split(' ')[0]);
+        if (!isNaN(feeInSol) && feeInSol > 0) {
+            const price = await getSolPrice();
+            if (price > 0) {
+                const feeUSD = feeInSol * price;
+                networkFeeUSD = feeUSD < 0.01 ? "<$0.01" : `~$${feeUSD.toFixed(2)}`;
+            } else {
+                networkFeeUSD = "~$0.01"; // Fallback if price fetch fails
+            }
+        } else {
+            networkFeeUSD = "Unknown";
+        }
+    }
+
     return {
         appName: "Application",
         balanceChanges: balanceChanges.length > 0 ? balanceChanges : [],
         network: cluster === 'mainnet' ? "Solana Mainnet" : "Solana Devnet",
         networkFee,
-        networkFeeUSD: cluster === 'mainnet' ? "~$0.01" : "$0.00",
+        networkFeeUSD,
         autoConfirm: "Off",
         chainId: cluster === 'mainnet' ? "mainnet-beta" : "devnet",
         error: errorMsg
