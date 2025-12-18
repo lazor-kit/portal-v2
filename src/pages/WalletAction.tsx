@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "../components/ui/card"
-import { Credential, getStoredCredentials, saveCredential } from "../utils/storage"
+import { Credential, getStoredCredentials, saveCredential, saveCredentialId } from "../utils/storage"
 import { authenticateWithPasskey, signMessage, signin, signUp } from "../utils/webauthn"
 import { detectPlatform, applyPlatformOptimizations, PlatformInfo } from "../utils/platform-detector"
 import { quickPlatformTest } from "../utils/platform-tester"
@@ -363,7 +363,8 @@ export default function WalletAction() {
 
       const signInData = await signin(displayStatus)
 
-      // signIn function already saves credential, just refresh UI
+      // Save the new credential ID and clear stale public key
+      saveCredentialId(signInData.credentialId)
       const updatedCreds = await getStoredCredentials()
       setCredentials(updatedCreds)
 

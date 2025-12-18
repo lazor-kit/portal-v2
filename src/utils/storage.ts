@@ -23,6 +23,6 @@ export function saveCredential(credentialId: string, publicKey: string, accountN
 // Save credential with only credentialId (for signIn operations)
 export function saveCredentialId(credentialId: string): void {
     localStorage.setItem("CREDENTIAL_ID", credentialId);
+    localStorage.removeItem("PUBLIC_KEY"); // Clear potentially stale public key
     localStorage.setItem("WALLET_STATUS", "TRUE");
-    // Don't save PUBLIC_KEY since we don't have it during signIn
 }
