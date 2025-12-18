@@ -106,9 +106,9 @@ export default function WalletAction() {
 
     // Only set up the handler in the parent window
     if (!isIframe()) {
-      return setupCredentialSyncHandler(() => credentials)
+      return setupCredentialSyncHandler(() => getStoredCredentials())
     }
-  }, [credentials])
+  }, [])
 
   // Initial credential load
   useEffect(() => {
@@ -424,6 +424,11 @@ export default function WalletAction() {
 
       // Use authenticateWithPasskey for existing credentials
       const authData = await authenticateWithPasskey(displayStatus)
+
+      // Save the new credential ID and clear stale public key
+      saveCredentialId(authData.credentialId)
+      const updatedCreds = await getStoredCredentials()
+      setCredentials(updatedCreds)
 
       const responseData = {
         ...authData,
