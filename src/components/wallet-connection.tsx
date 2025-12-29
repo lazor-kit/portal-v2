@@ -21,17 +21,6 @@ export function WalletConnection({ onConnect, portalParams }: WalletConnectionPr
   const [isLoading, setIsLoading] = useState(false)
   const [, setStatus] = useState<VerificationStatus>("unknown")
 
-  // Mock API verification function
-  const verifyDomain = async (domain: string): Promise<boolean> => {
-    // TODO: Replace with actual API call
-    console.log("Verifying domain:", domain)
-    // Simulating delay
-    await new Promise(resolve => setTimeout(resolve, 500))
-
-    // Mock whitelist
-    const whitelist = ["https://localhost:3001", "https://example.com", "https://app.uniswap.org"]
-    return whitelist.includes(domain) || domain.includes("localhost")
-  }
 
   useEffect(() => {
     const handleMessage = async () => {
