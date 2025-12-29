@@ -34,23 +34,8 @@ export function WalletConnection({ onConnect, portalParams }: WalletConnectionPr
   }
 
   useEffect(() => {
-    // Verify initial origin if exists
-    if (origin) {
-      setStatus("loading")
-      verifyDomain(origin).then(isVerified => {
-        setStatus(isVerified ? "verified" : "unverified")
-      })
-    }
-  }, []) // Run once on mount for invalid/default origin
-
-  useEffect(() => {
     const handleMessage = async (event: MessageEvent) => {
       // In a real scenario, you might want to filter events more strictly
-      const domain = event.origin
-      if (!domain) return
-
-      // Log origin as requested
-      setOrigin(domain)
       setStatus("loading")
 
       try {
