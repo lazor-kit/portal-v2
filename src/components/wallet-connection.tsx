@@ -34,17 +34,9 @@ export function WalletConnection({ onConnect, portalParams }: WalletConnectionPr
   }
 
   useEffect(() => {
-    const handleMessage = async (event: MessageEvent) => {
+    const handleMessage = async () => {
       // In a real scenario, you might want to filter events more strictly
       setStatus("loading")
-
-      try {
-        const isVerified = await verifyDomain(domain)
-        setStatus(isVerified ? "verified" : "unverified")
-      } catch (error) {
-        console.error("Verification failed", error)
-        setStatus("unverified")
-      }
     }
 
     window.addEventListener("message", handleMessage)
