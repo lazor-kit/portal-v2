@@ -18,7 +18,6 @@ type VerificationStatus = "loading" | "verified" | "unverified" | "unknown"
 
 export function WalletConnection({ onConnect, portalParams }: WalletConnectionProps) {
   const [accountName, setAccountName] = useState("")
-  const [origin, setOrigin] = useState<string>("https://localhosst:3001")
   const [isLoading, setIsLoading] = useState(false)
   const [, setStatus] = useState<VerificationStatus>("unknown")
 
