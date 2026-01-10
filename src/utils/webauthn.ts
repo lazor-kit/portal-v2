@@ -51,7 +51,11 @@ function getWebAuthnEnvironment(): WebAuthnEnvironment {
 
 function processPublicKey(pubkeyBuffer: ArrayBuffer): string {
   const publicKey = new Uint8Array(pubkeyBuffer);
-  const pubkeyUncompressed = publicKey.slice(SECP256R1_SPKI_HEADER.length);
+  const pubkeyUncompressed = publicKey.slice(-65);
+
+  if (pubkeyUncompressed[0] !== 0x04) {
+    throw new Error("Invalid Public Key format (Not P-256 Uncompressed)");
+  }
   const pubkey = secp256r1.ProjectivePoint.fromHex(pubkeyUncompressed);
   return Buffer.from(pubkey.toRawBytes(true)).toString("base64");
 }
