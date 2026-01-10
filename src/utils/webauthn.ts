@@ -1,5 +1,5 @@
 import { Buffer } from 'buffer';
-import { generateRandomChallenge, SECP256R1_SPKI_HEADER } from './utils';
+import { generateRandomChallenge } from './utils';
 import { secp256r1 } from '@noble/curves/p256';
 import { sha256 } from '@noble/hashes/sha256';
 
