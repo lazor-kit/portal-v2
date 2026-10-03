@@ -1,225 +1,106 @@
 import { Buffer } from 'buffer';
-import { generateRandomChallenge } from './utils';
 import { secp256r1 } from '@noble/curves/p256';
 import { sha256 } from '@noble/hashes/sha256';
+import type { AssertionFields } from '@/security/reply';
 
-// Types and Interfaces
-export interface WalletResult {
-  credentialId: string;
-  publickey: string;
-  status: 'created' | 'existing';
+const CEREMONY_TIMEOUT_MS = 60_000;
+
+function randomBytes(length: number): Uint8Array {
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+  return bytes;
 }
 
-export interface CustomWebAuthnOptions {
-  authenticatorAttachment?: "platform" | "cross-platform" | undefined;
-  userVerification?: "required" | "preferred" | "discouraged";
-  residentKey?: "required" | "preferred" | "discouraged";
-  timeout?: number;
-  attestation?: "none" | "indirect" | "direct" | "enterprise";
+const toBase64 = (bytes: ArrayBuffer | Uint8Array) => Buffer.from(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)).toString('base64');
+
+/** The compressed P-256 key (33 bytes, base64) from a registration's SPKI. */
+function compressedPublicKey(spki: ArrayBuffer): string {
+  const uncompressed = new Uint8Array(spki).slice(-65);
+  if (uncompressed[0] !== 0x04) throw new Error('The passkey did not return a P-256 public key.');
+  return toBase64(secp256r1.ProjectivePoint.fromHex(uncompressed).toRawBytes(true));
 }
 
-interface WebAuthnEnvironment {
-  isCustomTabs: boolean;
-  options: CustomWebAuthnOptions;
-}
-
-// Constants
-const DEFAULT_TIMEOUT = 30000;
-const DEFAULT_CHALLENGE = new Uint8Array([117, 61, 252, 231, 191, 241]);
-const CREDENTIAL_STORAGE_KEYS = {
-  id: "CREDENTIAL_ID",
-  publicKey: "PUBLIC_KEY"
-};
-
-// Helper Functions
-function getWebAuthnEnvironment(): WebAuthnEnvironment {
-  const globalOptions = (window as any).__webauthn_options;
-  const isCustomTabs = navigator.userAgent.includes('wv') &&
-    navigator.userAgent.includes('Chrome') &&
-    !(window as any).chrome?.runtime;
-
-  const options = {
-    authenticatorAttachment: globalOptions?.authenticatorAttachment ?? "platform",
-    userVerification: globalOptions?.userVerification ?? "required",
-    residentKey: globalOptions?.residentKey ?? "required",
-    timeout: globalOptions?.timeout ?? DEFAULT_TIMEOUT,
-    attestation: globalOptions?.attestation ?? "none"
+/** The fields the SDKs read from an assertion. */
+function assertionFields(response: AuthenticatorAssertionResponse): AssertionFields {
+  const authenticatorData = new Uint8Array(response.authenticatorData);
+  const clientDataJSON = new Uint8Array(response.clientDataJSON);
+  const signature = secp256r1.Signature.fromDER(new Uint8Array(response.signature)).normalizeS();
+  const msg = new Uint8Array(authenticatorData.length + 32);
+  msg.set(authenticatorData, 0);
+  msg.set(sha256(clientDataJSON), authenticatorData.length);
+  return {
+    normalized: toBase64(signature.toCompactRawBytes()),
+    msg: toBase64(msg),
+    clientDataJSONReturn: toBase64(clientDataJSON),
+    authenticatorDataReturn: toBase64(authenticatorData),
   };
-
-  return { isCustomTabs, options };
 }
 
-function processPublicKey(pubkeyBuffer: ArrayBuffer): string {
-  const publicKey = new Uint8Array(pubkeyBuffer);
-  const pubkeyUncompressed = publicKey.slice(-65);
-
-  if (pubkeyUncompressed[0] !== 0x04) {
-    throw new Error("Invalid Public Key format (Not P-256 Uncompressed)");
-  }
-  const pubkey = secp256r1.ProjectivePoint.fromHex(pubkeyUncompressed);
-  return Buffer.from(pubkey.toRawBytes(true)).toString("base64");
+/**
+ * Sign `challenge` with the passkey `credentialId` names, and no other. The
+ * challenge is the classified request bytes, never a URL parameter.
+ */
+export async function signChallenge(challenge: Uint8Array, credentialId: Uint8Array): Promise<{ credentialId: string; assertion: AssertionFields }> {
+  const credential = (await navigator.credentials.get({
+    publicKey: {
+      challenge,
+      allowCredentials: [{ type: 'public-key', id: credentialId }],
+      userVerification: 'required',
+      timeout: CEREMONY_TIMEOUT_MS,
+    },
+  })) as PublicKeyCredential | null;
+  if (!credential) throw new Error('No passkey answered.');
+  return { credentialId: toBase64(credential.rawId), assertion: assertionFields(credential.response as AuthenticatorAssertionResponse) };
 }
 
-function handleWebAuthnError(error: unknown, operation: string, displayStatus: (message: string, type: string) => void): never {
-  const errorMessage = error instanceof Error ? error.message : String(error);
-  displayStatus(`${operation} failed: ${errorMessage}`, "error");
-  throw error;
+/**
+ * Sign in with any passkey for this portal. With an ownership-proof
+ * challenge, the assertion over it is returned; without one, a random
+ * challenge is used and only the credential is.
+ */
+export async function signIn(proof: Uint8Array | null): Promise<{ credentialId: string; assertion?: AssertionFields }> {
+  const credential = (await navigator.credentials.get({
+    publicKey: {
+      challenge: proof ?? randomBytes(32),
+      userVerification: 'required',
+      timeout: CEREMONY_TIMEOUT_MS,
+    },
+  })) as PublicKeyCredential | null;
+  if (!credential) throw new Error('No passkey answered.');
+  const credentialId = toBase64(credential.rawId);
+  if (!proof) return { credentialId };
+  return { credentialId, assertion: assertionFields(credential.response as AuthenticatorAssertionResponse) };
 }
 
-// Main WebAuthn Functions
-// Main WebAuthn Functions
-export async function signup(
-  username: string,
-  displayStatus: (message: string, type: string) => void = (msg) => console.log(msg)
-): Promise<WalletResult> {
-  try {
-    const { isCustomTabs } = getWebAuthnEnvironment();
-    const userId = generateRandomChallenge(); // In real app, derived from username or server
-
-    displayStatus(
-      isCustomTabs ? "Creating passkey for Custom Tabs..." : "Creating passkey...",
-      "loading"
-    );
-
-    const credential = (await navigator.credentials.create({
-      publicKey: {
-        challenge: DEFAULT_CHALLENGE as any,
-        rp: {
-          name: "Lazor Kit Portal",
-          id: window.location.hostname
-        },
-        user: {
-          id: Buffer.from(userId),
-          name: username,
-          displayName: username
-        },
-        pubKeyCredParams: [
-          { type: "public-key", alg: -7 },
-        ],
-        authenticatorSelection: {
-          authenticatorAttachment: "platform",
-          residentKey: "required",
-          requireResidentKey: true,
-          userVerification: "required"
-        },
-        attestation: "none",
-        timeout: 60000
+/** Register a new passkey named `name`; its public key comes from the registration itself. */
+export async function createPasskey(name: string): Promise<{ credentialId: string; publicKey: string }> {
+  const credential = (await navigator.credentials.create({
+    publicKey: {
+      challenge: randomBytes(32),
+      rp: { name: 'Lazor Kit Portal', id: window.location.hostname },
+      user: { id: randomBytes(32), name, displayName: name },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+      authenticatorSelection: {
+        authenticatorAttachment: 'platform',
+        residentKey: 'required',
+        requireResidentKey: true,
+        userVerification: 'required',
       },
-    })) as PublicKeyCredential;
-
-    if (!credential) throw new Error("No credential returned");
-
-    const response = credential.response as AuthenticatorAttestationResponse;
-    const pubkeyBuffer = response.getPublicKey();
-    if (!pubkeyBuffer) throw new Error("No public key returned");
-
-    const compressedKey = processPublicKey(pubkeyBuffer);
-    const credentialId = Buffer.from(credential.rawId).toString("base64");
-
-    // Save to storage
-    localStorage.setItem(CREDENTIAL_STORAGE_KEYS.id, credentialId);
-    localStorage.setItem(CREDENTIAL_STORAGE_KEYS.publicKey, compressedKey);
-    displayStatus("Account created successfully!", "success");
-    return { credentialId, publickey: compressedKey, status: "created" };
-
-  } catch (error) {
-    return handleWebAuthnError(error, "Passkey creation", displayStatus);
-  }
+      attestation: 'none',
+      timeout: CEREMONY_TIMEOUT_MS,
+    },
+  })) as PublicKeyCredential | null;
+  if (!credential) throw new Error('No passkey was created.');
+  const spki = (credential.response as AuthenticatorAttestationResponse).getPublicKey();
+  if (!spki) throw new Error('The passkey did not return a public key.');
+  return { credentialId: toBase64(credential.rawId), publicKey: compressedPublicKey(spki) };
 }
 
-export async function signin(
-  displayStatus: (message: string, type: string) => void = (msg) => console.log(msg),
-  options?: {
-    customErrorMessage?: string;
-    successMessage?: string;
-  }
-): Promise<{ credentialId: string }> {
-  return authenticateWithPasskey(displayStatus, options);
+/** A WebAuthn failure in words a person can act on. */
+export function ceremonyErrorText(error: unknown): string {
+  const name = error instanceof DOMException ? error.name : '';
+  if (name === 'NotAllowedError') return 'The passkey request was cancelled or timed out.';
+  if (name === 'InvalidStateError') return 'This passkey already exists on this device.';
+  if (name === 'SecurityError') return 'Passkeys are not available on this page.';
+  return error instanceof Error && error.message ? error.message : 'The passkey request failed.';
 }
-
-export async function authenticateWithPasskey(
-  displayStatus: (message: string, type: string) => void = (msg) => console.log(msg),
-  options?: {
-    customErrorMessage?: string;
-    successMessage?: string;
-  }
-): Promise<{ credentialId: string }> {
-  try {
-    const credential = (await navigator.credentials.get({
-      publicKey: {
-        challenge: DEFAULT_CHALLENGE as any,
-        userVerification: "required",
-      },
-    })) as PublicKeyCredential;
-
-    if (!credential) throw new Error("Authentication failed");
-
-    displayStatus(
-      options?.successMessage || "Wallet connected successfully!",
-      "success"
-    );
-
-    return {
-      credentialId: Buffer.from(credential.rawId).toString("base64"),
-    };
-
-  } catch (error) {
-    return handleWebAuthnError(error, "Authentication", displayStatus);
-  }
-}
-
-export async function signMessage(
-  message: string,
-  credentialId?: string,
-  displayStatus: (message: string, type: string) => void = (msg) => console.log(msg)
-): Promise<{
-  normalized: string;
-  msg: string;
-  clientDataJSONReturn: string;
-  authenticatorDataReturn: string;
-}> {
-  try {
-    const targetCredentialId = credentialId || localStorage.getItem(CREDENTIAL_STORAGE_KEYS.id);
-    if (!targetCredentialId) {
-      throw new Error("No credential ID provided or found in storage");
-    }
-    const challenge = Buffer.from(message, "base64");
-
-    const credential = (await navigator.credentials.get({
-      publicKey: {
-        challenge,
-        allowCredentials: [{
-          type: "public-key",
-          id: new Uint8Array(Buffer.from(targetCredentialId, "base64"))
-        }],
-        userVerification: "required"
-      },
-    })) as PublicKeyCredential;
-
-    if (!credential) throw new Error("No credential returned");
-
-    const assertionResponse = credential.response as AuthenticatorAssertionResponse;
-    const sig = secp256r1.Signature.fromDER(new Uint8Array(assertionResponse.signature));
-    const authenticatorData = new Uint8Array(assertionResponse.authenticatorData);
-    const clientDataJSON = new Uint8Array(assertionResponse.clientDataJSON);
-
-    const authenticatorDataReturn = Buffer.from(authenticatorData).toString("base64");
-    const clientDataJSONReturn = Buffer.from(clientDataJSON).toString("base64");
-    const clientDataJSONDigest = sha256(clientDataJSON);
-    const msg = Buffer.from(
-      new Uint8Array([...authenticatorData, ...clientDataJSONDigest])
-    ).toString("base64");
-
-    const normalized = Buffer.from(
-      sig.normalizeS().toCompactRawBytes()
-    ).toString("base64");
-
-    displayStatus("Message signed successfully", "success");
-    return { normalized, msg, clientDataJSONReturn, authenticatorDataReturn };
-
-  } catch (error) {
-    return handleWebAuthnError(error, "Message signing", displayStatus);
-  }
-}
-
-export const signUp = signup;

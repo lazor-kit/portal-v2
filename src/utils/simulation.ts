@@ -24,6 +24,8 @@ export interface SimulationResult {
     autoConfirm: string;
     chainId: string;
     error?: string;
+    /** No simulation result at all (the RPC route was unreachable or not configured), as opposed to a failing transaction. */
+    unavailable?: boolean;
 }
 
 
@@ -556,7 +558,7 @@ export async function simulateTransaction(base64Tx: string, cluster: Cluster): P
         }
 
     } catch (error) {
-        console.error("Simulation failed unexpectedly:", error);
+        console.warn("Simulation unavailable:", error instanceof Error ? error.message : error);
     }
 
     let errorMsg: string | undefined;
@@ -580,7 +582,7 @@ export async function simulateTransaction(base64Tx: string, cluster: Cluster): P
         } else if (simulated?.err) {
             errorMsg = `Transaction simulation failed: ${String(simulated.err)}`;
         } else {
-            errorMsg = "Transaction simulation failed";
+            errorMsg = simulated ? "Transaction simulation failed" : "This transaction could not be simulated.";
         }
         if (errorMsg) {
             errorMsg = errorMsg.replace(/"/g, '');
@@ -612,6 +614,7 @@ export async function simulateTransaction(base64Tx: string, cluster: Cluster): P
         networkFeeUSD,
         autoConfirm: "Off",
         chainId: cluster === 'mainnet' ? "mainnet-beta" : "devnet",
-        error: errorMsg
+        error: errorMsg,
+        unavailable: !isSuccess && !simulated,
     };
 }

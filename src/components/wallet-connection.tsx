@@ -1,186 +1,140 @@
-"use client"
-
-import { useState, useEffect } from "react"
-import { Wallet, ArrowRight } from "lucide-react"
+import { useState, type FormEvent, type MouseEvent } from "react"
+import { Wallet, ArrowRight, KeyRound } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { signin, signup } from "../utils/webauthn"
-import { getStoredCredentials } from "../utils/storage"
+import { ceremonyErrorText, createPasskey, signIn } from "@/utils/webauthn"
+import { rememberCredential, storedCredential } from "@/utils/storage"
+import { isTrustedActivation, useActivationGuard } from "@/security/gesture"
+import type { PortalResult } from "@/security/reply"
 
-import { PortalCommunicator, PortalParams } from "../utils/portal-communicator"
+type Connected = Extract<PortalResult, { type: "connected" }>
 
 interface WalletConnectionProps {
-  onConnect: (address: string) => void
-  portalParams: PortalParams | null
+  /** The ownership-proof challenge to sign while signing in, when the request carried one. */
+  proof: Uint8Array | null
+  requesterLabel: string
+  framed: boolean
+  onConnected: (result: Connected) => void
+  onCancel: () => void
 }
 
-type VerificationStatus = "loading" | "verified" | "unverified" | "unknown"
+/** Longest name kept for a new passkey; authenticators may truncate past 64 bytes. */
+const MAX_NAME = 60
 
-export function WalletConnection({ onConnect, portalParams }: WalletConnectionProps) {
+export function WalletConnection({ proof, requesterLabel, framed, onConnected, onCancel }: WalletConnectionProps) {
   const [accountName, setAccountName] = useState("")
-  const [isLoading, setIsLoading] = useState(false)
-  const [, setStatus] = useState<VerificationStatus>("unknown")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const guard = useActivationGuard(framed, !busy)
+  const ready = guard.state === "ready" && !busy
 
-
-  useEffect(() => {
-    const handleMessage = async () => {
-      // In a real scenario, you might want to filter events more strictly
-      setStatus("loading")
-    }
-
-    window.addEventListener("message", handleMessage)
-
-    return () => {
-      window.removeEventListener("message", handleMessage)
-    }
-  }, [])
-
-  // Function to handle sign in option
-  const handleSignIn = async () => {
+  const handleSignIn = async (event: MouseEvent<HTMLButtonElement>) => {
+    if (!ready || !isTrustedActivation(event.nativeEvent)) return
+    setBusy(true)
+    setError(null)
     try {
-      setIsLoading(true)
-      // Assuming setStatus is for a different state, e.g., a message display
-      // setStatus({ message: 'Signing in with passkey...', type: 'info' })
-
-      const result = await signin((msg) => console.log(msg)) // Changed to console.log as setStatus is not defined for this purpose
-
-      // Ensure we persist the credential ID locally
-      // Also, if we don't have an ACCOUNT_NAME, we might want to set a default or leave it ??
-      // For now, let's keep existing or default to "Account 1"
-      // saveCredentialId(result.credentialId) // saveCredentialId is not defined
-
-      // signIn function already saves credential, just refresh UI
-      const updatedCreds = getStoredCredentials()
-      const storedAccountName = updatedCreds[0]?.accountName || "Account 1"
-
-      if (portalParams) {
-        // Find the matching credential to get the public key
-        const matchingCred = updatedCreds.find(c => c.credentialId === result.credentialId) || updatedCreds[0];
-
-        PortalCommunicator.reply({
-          type: "WALLET_CONNECTED",
-          credentialId: result.credentialId,
-          publickey: matchingCred?.publicKey, // Include stored public key
-          accountName: storedAccountName,
-          timestamp: new Date().toISOString(),
-          environment: portalParams.expoParam ? 'expo' : 'browser',
-          platform: portalParams.expoParam ? 'mobile' : 'web',
-          expo: portalParams.expoParam
-        }, portalParams)
-      }
-      onConnect(result.credentialId) // Added back onConnect call
-    } catch (error: any) {
-      console.error(error)
-      // setStatus({ message: error.message || 'Failed to sign in', type: 'error' }) // setStatus is not defined for this purpose
-      if (portalParams) {
-        PortalCommunicator.reply({
-          type: "error",
-          error: error.message || "Sign in failed"
-        }, portalParams)
-      }
+      const { credentialId, assertion } = await signIn(proof)
+      // A key is reported only when it was stored for this very passkey.
+      const stored = storedCredential(credentialId)
+      onConnected({
+        type: "connected",
+        credentialId,
+        kind: "asserted",
+        publicKey: stored?.publicKey,
+        accountName: stored?.name,
+        assertion,
+        timestamp: Date.now(),
+      })
+    } catch (e) {
+      setError(ceremonyErrorText(e))
     } finally {
-      setIsLoading(false)
+      setBusy(false)
     }
   }
 
-  // Function to handle sign up option
-  const handleSignUp = async () => {
+  const handleCreate = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const submitter = (event.nativeEvent as SubmitEvent).submitter
+    if (!ready || !isTrustedActivation(event.nativeEvent) || !submitter) return
+    const name = accountName.trim().slice(0, MAX_NAME)
+    if (!name) return
+    setBusy(true)
+    setError(null)
     try {
-      setIsLoading(true)
-      // setStatus({ message: 'Creating account...', type: 'info' }) // setStatus is not defined for this purpose
-
-      const nameToUse = accountName || "Account 1"
-      const result = await signup(nameToUse, (msg) => console.log(msg)) // Changed to console.log as setStatus is not defined for this purpose
-
-      // Save with Account Name
-      // saveCredential(result.credentialId, result.publickey, nameToUse) // saveCredential is not defined
-
-      if (portalParams) {
-        PortalCommunicator.reply({
-          type: "WALLET_CONNECTED",
-          credentialId: result.credentialId,
-          publickey: result.publickey, // Returns both credentialId + publickey
-          accountName: nameToUse, // Return the created account name
-          timestamp: new Date().toISOString(),
-          environment: portalParams.expoParam ? 'expo' : 'browser',
-          platform: portalParams.expoParam ? 'mobile' : 'web',
-          expo: portalParams.expoParam
-        }, portalParams)
-      }
-      onConnect(result.credentialId) // Added back onConnect call
-    } catch (error: any) {
-      console.error(error)
-      // setStatus({ message: error.message || 'Failed to create account', type: 'error' }) // setStatus is not defined for this purpose
-      if (portalParams) {
-        PortalCommunicator.reply({
-          type: "error",
-          error: error.message || "Sign up failed"
-        }, portalParams)
-      }
+      const { credentialId, publicKey } = await createPasskey(name)
+      rememberCredential(credentialId, { publicKey, name, createdAt: Date.now() })
+      onConnected({ type: "connected", credentialId, kind: "created", publicKey, accountName: name, timestamp: Date.now() })
+    } catch (e) {
+      setError(ceremonyErrorText(e))
     } finally {
-      setIsLoading(false)
+      setBusy(false)
     }
   }
 
   return (
-    <div className="flex flex-col items-center justify-center w-full h-full p-6 space-y-8 animate-in fade-in zoom-in-95 duration-300">
-      <div className="relative">
-        <div className="absolute inset-0 flex items-center">
-          <span className="w-full border-t border-border/60" />
-        </div>
-        <div className="relative flex justify-center text-[11px] uppercase tracking-wider">
-          <span className="bg-background px-3 text-muted-foreground/80 font-medium">
-            Already have an account? Sign in with Passkey
-          </span>
-        </div>
+    <div className="flex flex-col items-center justify-center w-full space-y-6 py-2" data-testid="connect">
+      <div className="w-full space-y-1 text-center">
+        <h1 className="text-base font-bold text-foreground">Connect with passkey</h1>
+        <p className="text-xs text-muted-foreground">
+          {requesterLabel} asks to connect to your wallet.
+          {proof && (
+            <span className="inline-flex items-center gap-1 ml-1">
+              <KeyRound className="w-3 h-3" /> Signing in also confirms you hold the passkey.
+            </span>
+          )}
+        </p>
       </div>
 
-      <div className="w-full space-y-6">
-        <div className="space-y-3">
-          <Button
-            onClick={handleSignIn}
-            disabled={isLoading}
-            size="lg"
-            className="w-full h-12 text-base font-medium shadow-md transition-all hover:scale-[1.02] active:scale-[0.98] rounded-xl"
-          >
-            <Wallet className="w-5 h-5 mr-2" />
-            {isLoading ? "Connecting..." : "Sign in"}
-            {!isLoading && <ArrowRight className="w-4 h-4 ml-2 opacity-70" />}
-          </Button>
-        </div>
+      <div ref={guard.ref} className="w-full space-y-5">
+        <Button
+          onClick={handleSignIn}
+          disabled={!ready}
+          size="lg"
+          className="w-full h-12 text-base font-medium shadow-md rounded-xl"
+          data-testid="sign-in"
+          data-guard={guard.state}
+        >
+          <Wallet className="w-5 h-5 mr-2" />
+          {busy ? "Waiting for passkey…" : "Sign in with passkey"}
+          {!busy && <ArrowRight className="w-4 h-4 ml-2 opacity-70" />}
+        </Button>
 
         <div className="relative">
           <div className="absolute inset-0 flex items-center">
             <span className="w-full border-t border-border/60" />
           </div>
           <div className="relative flex justify-center text-[11px] uppercase tracking-wider">
-            <span className="bg-background px-3 text-muted-foreground/80 font-medium">
-              New to Solana? Create an account
-            </span>
+            <span className="bg-background px-3 text-muted-foreground/80 font-medium">New here? Create a passkey</span>
           </div>
         </div>
 
-        <form onSubmit={(e) => { e.preventDefault(); handleSignUp(); }} className="space-y-3">
-          <div className="space-y-1">
-            <Input
-              type="text"
-              placeholder="Enter your account name"
-              value={accountName}
-              onChange={(e) => setAccountName(e.target.value)}
-              className="h-11 rounded-xl border-input/80 bg-muted/30 focus:bg-background focus-visible:ring-offset-0 focus-visible:ring-2 focus-visible:ring-primary/20 text-sm transition-all"
-              disabled={isLoading}
-            />
-          </div>
-          <Button
-            variant="outline"
-            className="w-full h-11 font-medium rounded-xl border-primary/20 hover:bg-primary/5 hover:text-primary transition-all active:scale-[0.98] text-foreground/90"
-            disabled={!accountName || isLoading}
-          >
+        <form onSubmit={handleCreate} className="space-y-3">
+          <Input
+            type="text"
+            placeholder="Name for this passkey"
+            value={accountName}
+            maxLength={MAX_NAME}
+            onChange={(e) => setAccountName(e.target.value)}
+            className="h-11 rounded-xl border-input/80 bg-muted/30 text-sm"
+            disabled={busy}
+            data-testid="account-name"
+          />
+          <Button type="submit" variant="outline" className="w-full h-11 font-medium rounded-xl" disabled={!ready || !accountName.trim()} data-testid="create">
             Create new account
           </Button>
         </form>
       </div>
+
+      {guard.state === "not-visible" && !busy && (
+        <p className="text-[10px] text-yellow-500 text-center leading-tight">
+          This window is covered or not fully visible. Make sure nothing is on top of it to continue.
+        </p>
+      )}
+      {error && <p className="text-xs text-red-500 text-center" role="alert" data-testid="connect-error">{error}</p>}
+
+      <button type="button" onClick={onCancel} className="text-xs text-muted-foreground underline-offset-4 hover:underline" data-testid="cancel">
+        Cancel
+      </button>
     </div>
   )
 }
-

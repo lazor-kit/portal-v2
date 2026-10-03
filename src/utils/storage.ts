@@ -1,28 +1,64 @@
-export interface Credential {
-    credentialId: string;
-    publicKey: string;
-    accountName: string;
+/**
+ * What the portal remembers about passkeys made here, keyed by credential id.
+ * Only the registration reveals a passkey's public key, so it is kept for
+ * that credential and reported for it alone. Browsers partition this storage
+ * by the embedding site, so an entry may be missing; nothing depends on one
+ * being there.
+ */
+
+export interface StoredCredential {
+  /** Compressed P-256 key, base64. */
+  readonly publicKey?: string;
+  /** The name given when the passkey was created. */
+  readonly name?: string;
+  readonly createdAt?: number;
 }
 
-export function getStoredCredentials(): Credential[] {
-    const credentialId = localStorage.getItem("CREDENTIAL_ID");
-    const publicKey = localStorage.getItem("PUBLIC_KEY");
-    const accountName = localStorage.getItem("ACCOUNT_NAME") || "Account 1";
+const KEY = 'lazorkit-portal:credentials';
+const LEGACY = { id: 'CREDENTIAL_ID', publicKey: 'PUBLIC_KEY', name: 'ACCOUNT_NAME', status: 'WALLET_STATUS' };
 
-    // If we have credentialId, return it (publicKey can be empty for signIn case)
-    return credentialId ? [{ credentialId, publicKey: publicKey || '', accountName }] : [];
+type Store = Record<string, StoredCredential>;
+
+function read(): Store {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(KEY) ?? '{}');
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? (parsed as Store) : {};
+  } catch {
+    return {};
+  }
 }
 
-export function saveCredential(credentialId: string, publicKey: string, accountName: string = "Account 1"): void {
-    localStorage.setItem("CREDENTIAL_ID", credentialId);
-    localStorage.setItem("PUBLIC_KEY", publicKey);
-    localStorage.setItem("ACCOUNT_NAME", accountName);
-    localStorage.setItem("WALLET_STATUS", "TRUE");
+function write(store: Store): void {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(store));
+  } catch {
+    // Storage unavailable (blocked, full): nothing is remembered.
+  }
 }
 
-// Save credential with only credentialId (for signIn operations)
-export function saveCredentialId(credentialId: string): void {
-    localStorage.setItem("CREDENTIAL_ID", credentialId);
-    localStorage.removeItem("PUBLIC_KEY"); // Clear potentially stale public key
-    localStorage.setItem("WALLET_STATUS", "TRUE");
+/** Moves the single credential kept by earlier versions into the map, once. */
+function migrate(): void {
+  try {
+    const id = localStorage.getItem(LEGACY.id);
+    const publicKey = localStorage.getItem(LEGACY.publicKey);
+    if (id && publicKey) {
+      const store = read();
+      store[id] ??= { publicKey, name: localStorage.getItem(LEGACY.name) ?? undefined };
+      write(store);
+    }
+    for (const key of Object.values(LEGACY)) localStorage.removeItem(key);
+  } catch {
+    // Nothing to migrate.
+  }
+}
+
+export function storedCredential(credentialId: string): StoredCredential | undefined {
+  migrate();
+  return Object.prototype.hasOwnProperty.call(read(), credentialId) ? read()[credentialId] : undefined;
+}
+
+export function rememberCredential(credentialId: string, entry: StoredCredential): void {
+  const store = read();
+  store[credentialId] = { ...store[credentialId], ...entry };
+  write(store);
 }
