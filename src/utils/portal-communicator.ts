@@ -1,4 +1,10 @@
-import { isIframe } from "./credentialSync"
+const isIframe = () => {
+    try {
+        return window.self !== window.top
+    } catch {
+        return true
+    }
+}
 
 export type PortalEnvironment = "browser" | "expo" | "unknown"
 export type PortalAction = "connect" | "sign" | "unknown"
