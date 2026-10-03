@@ -27,9 +27,17 @@ export interface SimulationResult {
 }
 
 
-// Default RPC endpoints
-const RPC_ENDPOINT_DEVNET = "https://api.devnet.solana.com";
-const RPC_ENDPOINT_MAINNET = "https://mainnet.helius-rpc.com/?api-key=47712b7a-ea63-49b8-9685-dff77d9eb55a";
+export type Cluster = "mainnet" | "devnet";
+
+/** The portal's own RPC route for `cluster`; it holds the upstream URL and key. */
+export function rpcEndpoint(cluster: Cluster): string {
+    return new URL(`/api/rpc?cluster=${cluster}`, window.location.origin).href;
+}
+
+export function connectionFor(cluster: Cluster): Connection {
+    return new Connection(rpcEndpoint(cluster), { commitment: "confirmed", disableRetryOnRateLimit: true });
+}
+
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 
@@ -89,9 +97,8 @@ async function getSolPrice(): Promise<number> {
 /**
  * Simulates a transaction to determine balance changes and metadata.
  */
-export async function simulateTransaction(base64Tx: string, cluster: string = 'devnet'): Promise<SimulationResult> {
-    const endpoint = cluster === 'mainnet' ? RPC_ENDPOINT_MAINNET : RPC_ENDPOINT_DEVNET;
-    const connection = new Connection(endpoint, "confirmed");
+export async function simulateTransaction(base64Tx: string, cluster: Cluster): Promise<SimulationResult> {
+    const connection = connectionFor(cluster);
     let networkFee = "Unknown";
     let isSuccess = false;
     const balanceChanges: BalanceChange[] = [];
