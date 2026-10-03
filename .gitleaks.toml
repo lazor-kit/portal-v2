@@ -1,0 +1,7 @@
+# Secret scan of the working tree and the build (CI). Dependencies are not ours to scan.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "installed dependencies"
+paths = ['''(^|/)node_modules/''', '''(^|/)e2e/\.out/''']
