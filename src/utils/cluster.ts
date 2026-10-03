@@ -19,6 +19,14 @@ export interface ResolvedCluster {
   readonly verified: boolean;
   /** The app asked for one cluster, and the preview belongs to the other. */
   readonly mismatch: boolean;
+  /**
+   * The network is known: the preview's blockhash is valid on `cluster`, or
+   * the app named `cluster` and no check contradicts it. When it is not
+   * known (devnet only by default, or the blockhash was found invalid there
+   * while the other cluster could not be checked), a failed simulation says
+   * nothing about the transaction, and is not shown as a likely failure.
+   */
+  readonly known: boolean;
 }
 
 /** Whether `blockhash` is valid on `cluster`; null when it could not be checked. */
@@ -46,10 +54,14 @@ export async function resolveCluster(requested: Cluster | null, blockhash: strin
   const first: Cluster = requested ?? 'devnet';
   const other: Cluster = first === 'mainnet' ? 'devnet' : 'mainnet';
   const source = requested ? 'request' : 'default';
-  if (!blockhash) return { cluster: first, source, verified: false, mismatch: false };
+  if (!blockhash) return { cluster: first, source, verified: false, mismatch: false, known: requested !== null };
   const safe = (cluster: Cluster) => check(cluster, blockhash).catch(() => null);
   const [onFirst, onOther] = await Promise.all([safe(first), safe(other)]);
-  if (onFirst === true) return { cluster: first, source, verified: true, mismatch: false };
-  if (onOther === true) return { cluster: other, source: 'preview', verified: true, mismatch: requested !== null };
-  return { cluster: first, source, verified: false, mismatch: false };
+  if (onFirst === true) return { cluster: first, source, verified: true, mismatch: false, known: true };
+  if (onOther === true) return { cluster: other, source: 'preview', verified: true, mismatch: requested !== null, known: true };
+  // Not settled by the blockhash. The app's word stands unless the
+  // blockhash was found invalid on its cluster and the other could not be
+  // checked (the preview may well belong there).
+  const contradicted = onFirst === false && onOther === null;
+  return { cluster: first, source, verified: false, mismatch: false, known: requested !== null && !contradicted };
 }

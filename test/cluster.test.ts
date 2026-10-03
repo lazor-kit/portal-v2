@@ -26,20 +26,41 @@ test('the blockhash of a v0 preview (as the SDK builds it), a legacy transaction
 });
 
 test('the requested cluster when the blockhash is valid there', async () => {
-  assert.deepEqual(await resolveCluster('mainnet', blockhash, validOn('mainnet')), { cluster: 'mainnet', source: 'request', verified: true, mismatch: false });
-  assert.deepEqual(await resolveCluster(null, blockhash, validOn('devnet')), { cluster: 'devnet', source: 'default', verified: true, mismatch: false });
+  assert.deepEqual(await resolveCluster('mainnet', blockhash, validOn('mainnet')), { cluster: 'mainnet', source: 'request', verified: true, mismatch: false, known: true });
+  assert.deepEqual(await resolveCluster(null, blockhash, validOn('devnet')), { cluster: 'devnet', source: 'default', verified: true, mismatch: false, known: true });
 });
 
 test('the other cluster when the blockhash is valid only there, flagged when the app asked otherwise', async () => {
-  assert.deepEqual(await resolveCluster('devnet', blockhash, validOn('mainnet')), { cluster: 'mainnet', source: 'preview', verified: true, mismatch: true });
+  assert.deepEqual(await resolveCluster('devnet', blockhash, validOn('mainnet')), { cluster: 'mainnet', source: 'preview', verified: true, mismatch: true, known: true });
   // No cluster asked: devnet was only the default, so mainnet is no mismatch.
-  assert.deepEqual(await resolveCluster(null, blockhash, validOn('mainnet')), { cluster: 'mainnet', source: 'preview', verified: true, mismatch: false });
+  assert.deepEqual(await resolveCluster(null, blockhash, validOn('mainnet')), { cluster: 'mainnet', source: 'preview', verified: true, mismatch: false, known: true });
+  // Found on the other cluster even while the requested one cannot be checked.
+  assert.deepEqual(await resolveCluster('devnet', blockhash, validOn('mainnet', ['devnet'])), { cluster: 'mainnet', source: 'preview', verified: true, mismatch: true, known: true });
 });
 
-test('unverified when the blockhash is valid nowhere, cannot be checked, or is missing', async () => {
-  assert.deepEqual(await resolveCluster('mainnet', blockhash, validOn(null)), { cluster: 'mainnet', source: 'request', verified: false, mismatch: false });
-  assert.deepEqual(await resolveCluster('mainnet', blockhash, validOn('devnet', ['devnet', 'mainnet'])), { cluster: 'mainnet', source: 'request', verified: false, mismatch: false });
-  assert.deepEqual(await resolveCluster(null, null, validOn('mainnet')), { cluster: 'devnet', source: 'default', verified: false, mismatch: false });
+test('unverified, but known, when the app named the cluster and no check contradicts it', async () => {
+  // Valid nowhere (an expired blockhash): the app's word stands.
+  assert.deepEqual(await resolveCluster('mainnet', blockhash, validOn(null)), { cluster: 'mainnet', source: 'request', verified: false, mismatch: false, known: true });
+  // Neither cluster could be checked.
+  assert.deepEqual(await resolveCluster('mainnet', blockhash, validOn('devnet', ['devnet', 'mainnet'])), { cluster: 'mainnet', source: 'request', verified: false, mismatch: false, known: true });
+  // The requested cluster could not be checked, the other says no.
+  assert.deepEqual(await resolveCluster('mainnet', blockhash, validOn(null, ['mainnet'])), { cluster: 'mainnet', source: 'request', verified: false, mismatch: false, known: true });
+});
+
+test('not known when the network is only the devnet default, or the blockhash was refused there and the other cluster could not be checked', async () => {
+  // A mainnet preview, no cluster named, mainnet unreachable (rate limited,
+  // or RPC_MAINNET_URL unset): devnet refuses the blockhash, so a devnet
+  // simulation says nothing about the transaction.
+  assert.deepEqual(await resolveCluster(null, blockhash, validOn('mainnet', ['mainnet'])), { cluster: 'devnet', source: 'default', verified: false, mismatch: false, known: false });
+  // The same with devnet named.
+  assert.deepEqual(await resolveCluster('devnet', blockhash, validOn('mainnet', ['mainnet'])), { cluster: 'devnet', source: 'request', verified: false, mismatch: false, known: false });
+  assert.deepEqual(await resolveCluster('mainnet', blockhash, validOn('devnet', ['devnet'])), { cluster: 'mainnet', source: 'request', verified: false, mismatch: false, known: false });
+  // Valid nowhere, or unchecked, with only the default to go on.
+  assert.deepEqual(await resolveCluster(null, blockhash, validOn(null)), { cluster: 'devnet', source: 'default', verified: false, mismatch: false, known: false });
+  assert.deepEqual(await resolveCluster(null, blockhash, validOn(null, ['devnet', 'mainnet'])), { cluster: 'devnet', source: 'default', verified: false, mismatch: false, known: false });
+  // No blockhash to check: the app's word, or nothing.
+  assert.deepEqual(await resolveCluster(null, null, validOn('mainnet')), { cluster: 'devnet', source: 'default', verified: false, mismatch: false, known: false });
+  assert.deepEqual(await resolveCluster('mainnet', null, validOn('mainnet')), { cluster: 'mainnet', source: 'request', verified: false, mismatch: false, known: true });
 });
 
 test('only mainnet and devnet are clusters', () => {
