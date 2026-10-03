@@ -29,9 +29,10 @@ jobs:
       - run: pnpm headers:check
       - run: pnpm build
       - name: No RPC key material in the bundle
+        # File names only: a matching line could hold the key itself.
         run: |
-          if grep -rniE 'api-key=|helius' dist/; then
-            echo "::error::RPC key material found in dist/"
+          if grep -rliE 'api-key=|helius' dist/; then
+            echo "::error::RPC key material found in the files above"
             exit 1
           fi
       - name: Secret scan of the tree and the bundle
