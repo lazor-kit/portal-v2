@@ -17,3 +17,6 @@ dist/
 
 # TypeScript incremental build state
 *.tsbuildinfo
+
+# end-to-end run output
+e2e/.out/
