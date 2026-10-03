@@ -26,6 +26,7 @@ function enforce(policy) {
     gates: { ...policy.gates, transaction: 'registered', approval: 'registered' },
     redirects: { ...policy.redirects, unregisteredSchemes: 'deny', unregisteredWeb: 'deny' },
     framing: { ...policy.framing, mode: 'enforce' },
+    contentPolicy: 'enforce',
   };
 }
 

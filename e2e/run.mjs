@@ -79,12 +79,22 @@ async function authenticator(page) {
   return { cdp, authenticatorId };
 }
 
-async function newPage({ url, userAgent, portalInit } = {}) {
-  const context = await browser.newContext({ viewport: { width: 1100, height: 900 }, ...(userAgent ? { userAgent } : {}) });
+/** Console lines about the Content-Security-Policy, from any page or frame. */
+const cspConsole = [];
+function watchConsole(page) {
+  page.on('console', (m) => {
+    if (/Content Security Policy|Content-Security-Policy/i.test(m.text())) cspConsole.push(m.text().slice(0, 300));
+    if (process.env.DEBUG) say(`[console ${m.type()}] ${m.text().slice(0, 300)}`);
+  });
+}
+
+async function newPage({ url, userAgent, portalInit, viewport = { width: 1100, height: 900 } } = {}) {
+  const context = await browser.newContext({ viewport, ...(userAgent ? { userAgent } : {}) });
   if (portalInit) await context.addInitScript(portalInit);
   const page = await context.newPage();
   page.on('pageerror', (e) => pageErrors.push(`${page.url()}: ${e.message}`));
-  if (process.env.DEBUG) page.on('console', (m) => say(`[console ${m.type()}] ${m.text().slice(0, 300)}`));
+  watchConsole(page);
+  context.on('page', watchConsole);
   context.on('response', async (response) => {
     if (response.url().includes('/api/rpc')) rpcBodies.push(await response.text().catch(() => ''));
   });
@@ -121,6 +131,29 @@ async function idle(page) {
 async function shot(page, name) {
   await page.screenshot({ path: join(SHOTS, `${name}.png`) }).catch(() => {});
 }
+
+/**
+ * A person's click on a guarded button (Approve, Sign, sign-in, create): the
+ * pointer comes to rest on it, the button arms, then the click.
+ */
+async function press(target, selector) {
+  // Forced: a button not yet armed is disabled, and takes no pointer events.
+  await target.hover(selector, { force: true });
+  await target.waitForSelector(`${selector}[data-guard=ready]`, { timeout: 10_000 });
+  await target.click(selector);
+}
+
+/** A box of the page covered by the dApp's own content, which lets clicks through. */
+async function cover(page, box, label = '') {
+  await page.evaluate(([b, text]) => {
+    const el = document.createElement('div');
+    el.className = 'e2e-cover';
+    el.textContent = text;
+    el.style.cssText = `position:fixed;z-index:2147483647;margin:0;padding:8px;border:0;box-sizing:border-box;left:${b.x}px;top:${b.y}px;width:${b.width}px;height:${b.height}px;background:#111;color:#fff;font:12px monospace;pointer-events:none`;
+    document.body.appendChild(el);
+  }, [box, label]);
+}
+const uncover = (page) => page.evaluate(() => document.querySelectorAll('.e2e-cover').forEach((el) => el.remove()));
 
 const results = [];
 async function scenario(name, fn) {
@@ -185,7 +218,7 @@ await scenario('connect: create a passkey (proof requested), reply kind created 
   check((await frame.textContent('[data-testid=requester-badge]')).includes('Registered: E2E dApp'), 'registered badge');
   await frame.fill('[data-testid=account-name]', 'E2E Alice');
   await shot(A.page, 'connect');
-  await frame.click('[data-testid=create]');
+  await press(frame, '[data-testid=create]');
   const result = await pending;
   check(result.ok, JSON.stringify(result));
   check(result.value.kind === 'created' && result.value.isCreated && result.value.connectionType === 'create', 'kind created');
@@ -202,7 +235,7 @@ await scenario('connect: sign in signs the ownership proof; key reported only fo
   const proof = ownershipChallenge();
   const pending = A.page.evaluate((c) => window.lk.connect(c), b64url(proof));
   const frame = await portalFrame(A.page);
-  await frame.click('[data-testid=sign-in]');
+  await press(frame, '[data-testid=sign-in]');
   const result = await pending;
   check(result.ok, JSON.stringify(result));
   const v = result.value;
@@ -214,12 +247,17 @@ await scenario('connect: sign in signs the ownership proof; key reported only fo
   return { kind: v.kind, assertion: 'verified' };
 });
 
-await scenario('connect: 32 random bytes (3.2.x/3.3.0 proof) are not signed; sign-in uses its own challenge', async () => {
+await scenario('connect: 32 random bytes (3.0.0-3.3.0 proof) are not signed; the reply claims no assertion, and carries the stored key', async () => {
   const pending = A.page.evaluate((c) => window.lk.connect(c), b64url(randomBytes(32)));
   const frame = await portalFrame(A.page);
-  await frame.click('[data-testid=sign-in]');
+  await press(frame, '[data-testid=sign-in]');
   const result = await pending;
-  check(result.ok && result.value.kind === 'asserted' && !result.value.assertion, JSON.stringify(result));
+  check(result.ok, JSON.stringify(result));
+  // No `kind`: SDKs before 3.3.1 then take the stored key for this credential
+  // instead of asking for a second signature.
+  check(result.value.kind === undefined && !result.value.assertion && result.value.connectionType === 'get', JSON.stringify(result.value));
+  check(result.value.publicKey === publicKey, 'the key stored for this credential');
+  return { kind: result.value.kind ?? null };
 });
 
 await scenario('signMessage (UTF-8): text shown as sent; the SDK accepts the signature', async () => {
@@ -234,7 +272,7 @@ await scenario('signMessage (UTF-8): text shown as sent; the SDK accepts the sig
   await sleep(800);
   check(await frame.$('[data-testid=message-review]'), 'still on the review after a synthetic click');
   await shot(A.page, 'sign-message');
-  await frame.click('[data-testid=approve]');
+  await press(frame, '[data-testid=approve]');
   const result = await pending;
   check(result.ok, JSON.stringify(result));
   await verifyAssertion(A, { credentialId, signature: result.value.signature, clientDataJson: result.value.clientDataJsonBase64, authenticatorData: result.value.authenticatorDataBase64 }, messageChallenge(Buffer.from(text, 'utf8')));
@@ -248,10 +286,10 @@ await scenario('signMessage (not UTF-8): fingerprint, explicit confirmation, the
   check((await frame.getAttribute('[data-testid=message-review]', 'data-kind')) === 'message-without-text', 'shown without text');
   const fingerprint = (await frame.textContent('[data-testid=fingerprint]')).replace(/\s/g, '');
   check(fingerprint === messageChallenge(Buffer.from(bytes)).subarray(26).toString('hex'), 'fingerprint is the message hash');
-  await frame.waitForSelector('[data-testid=approve][data-guard=ready]');
+  await sleep(800);
   check(await frame.isDisabled('[data-testid=approve]'), 'Sign disabled until confirmed');
   await frame.check('[data-testid=confirm]');
-  await frame.click('[data-testid=approve]');
+  await press(frame, '[data-testid=approve]');
   const result = await pending;
   check(result.ok, JSON.stringify(result));
   await verifyAssertion(A, { credentialId, signature: result.value.signature, clientDataJson: result.value.clientDataJsonBase64, authenticatorData: result.value.authenticatorDataBase64 }, messageChallenge(Buffer.from(bytes)));
@@ -279,7 +317,7 @@ await scenario('transaction: preview simulated through /api/rpc on the network i
   check(cluster === 'devnet', `simulated on ${cluster}: the blockhash is valid on devnet only`);
   check((await frame.textContent('[data-testid=transaction-review]')).includes('The app asked for mainnet'), 'mismatch noted');
   await shot(A.page, 'transaction');
-  await frame.click('[data-testid=approve]');
+  await press(frame, '[data-testid=approve]');
   const result = await pending;
   check(result.ok, JSON.stringify(result));
   await verifyAssertion(A, { credentialId, signature: result.value.signature, clientDataJson: result.value.clientDataJsonBase64, authenticatorData: result.value.authenticatorDataBase64 }, challenge);
@@ -294,10 +332,10 @@ await scenario('approval (32 bytes, no preview): fingerprint and confirmation; r
   const frame = await portalFrame(A.page);
   check((await frame.getAttribute('[data-testid=approval-review]', 'data-kind')) === 'approval', 'approval screen');
   check((await frame.textContent('[data-testid=fingerprint]')).replace(/\s/g, '') === challenge.toString('hex'), 'fingerprint');
-  await frame.waitForSelector('[data-testid=approve][data-guard=ready]');
+  await sleep(800);
   check(await frame.isDisabled('[data-testid=approve]'), 'Approve off until confirmed');
   await frame.check('[data-testid=confirm]');
-  await frame.click('[data-testid=approve]');
+  await press(frame, '[data-testid=approve]');
   const result = await pending;
   check(result.ok, JSON.stringify(result));
 });
@@ -321,6 +359,130 @@ await scenario('gesture: an overlay on top of the dialog disables Approve until 
   await frame.click('[data-testid=cancel]');
   const result = await pending;
   check(!result.ok, 'cancelled');
+});
+
+await scenario('gesture: covering only the requester and the message, buttons left clear, disables Approve (cross-site frame)', async () => {
+  // A page of another site (127.0.0.1) than the portal (localhost) frames
+  // it, so the portal runs in a process of its own as in production, and
+  // draws its own fake requester and summary over the real ones.
+  const X = await newPage({ url: `${DAPP_B}/` });
+  try {
+    const text = 'partial overlay test';
+    const query = `action=sign&message=${b64url(messageChallenge(Buffer.from(text)))}&displayMessage=${encodeURIComponent(text)}&credentialId=${encodeURIComponent(credentialId)}`;
+    const pending = X.page.evaluate(([q]) => window.lk.raw(q, 20_000), [query]);
+    const frame = await portalFrame(X.page);
+    await frame.waitForSelector('[data-testid=approve][data-guard=ready]');
+    const iframe = await (await X.page.$('iframe#raw')).boundingBox();
+    const buttonsTop = await frame.$eval('[data-testid=approve]', (b) => b.getBoundingClientRect().top);
+    await cover(X.page, { x: iframe.x, y: iframe.y, width: iframe.width, height: Math.floor(buttonsTop - 8) }, 'Request from https://honest.example (Registered)');
+    await frame.waitForSelector('[data-testid=approve][data-guard=not-visible]', { timeout: 5000 });
+    check(await frame.isDisabled('[data-testid=approve]'), 'Approve off while the surface is covered');
+    await shot(X.page, 'gesture-partial-cover');
+    // A real click on the uncovered button does nothing.
+    const box = await (await frame.$('[data-testid=approve]')).boundingBox();
+    await X.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await sleep(500);
+    check(await frame.$('[data-testid=message-review]'), 'still on the review');
+    await uncover(X.page);
+    await frame.waitForSelector('[data-testid=approve][data-guard=ready]', { timeout: 5000 });
+    await frame.click('[data-testid=cancel]');
+    const reply = await pending;
+    check(reply.data?.type === 'error' && reply.data.error?.code === 'user-rejected', JSON.stringify(reply));
+  } finally {
+    await X.context.close();
+  }
+});
+
+await scenario('gesture: the mouse entering the frame starts the delay again; a click right after is ignored', async () => {
+  const pending = A.page.evaluate(([t, c]) => window.lk.signMessage(t, c), ['entry test', credentialId]);
+  const frame = await portalFrame(A.page);
+  await A.page.mouse.move(5, 5);
+  await frame.waitForSelector('[data-testid=approve][data-guard=ready]');
+  const box = await (await frame.$('[data-testid=approve]')).boundingBox();
+  // In from outside and straight onto Approve, as a frame moved under a resting pointer would be.
+  await A.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 1 });
+  await A.page.mouse.down();
+  await A.page.mouse.up();
+  await sleep(300);
+  check(await frame.$('[data-testid=message-review]'), 'the click right after entering is ignored');
+  // After resting on it, the same click signs.
+  await frame.waitForSelector('[data-testid=approve][data-guard=ready]');
+  await A.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  const result = await pending;
+  check(result.ok, JSON.stringify(result));
+});
+
+await scenario('layout: in a short window the request scrolls inside the frame; requester and buttons stay on screen, Approve works', async () => {
+  const S = await newPage({ url: `${DAPP}/`, viewport: { width: 1100, height: 400 } });
+  try {
+    const { credentials } = await A.cdp.send('WebAuthn.getCredentials', { authenticatorId: A.authenticatorId });
+    await S.cdp.send('WebAuthn.addCredential', { authenticatorId: S.authenticatorId, credential: credentials[0] });
+    const challenge = randomBytes(32);
+    const pending = S.page.evaluate(([ch, tx, c]) => window.lk.sign(ch, tx, c, 'devnet'), [b64url(challenge), previewTransaction(), credentialId]);
+    const frame = await portalFrame(S.page);
+    await frame.waitForSelector('[data-testid=network][data-cluster]');
+    const [scrollable, frameHeight] = await frame.$eval('[data-testid=review-content]', (el) => [el.scrollHeight > el.clientHeight + 4, window.innerHeight]);
+    check(scrollable, `the request scrolls inside a ${frameHeight}px frame`);
+    const inView = (selector) => frame.$eval(selector, (el) => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight; });
+    check(await inView('[data-testid=requester]') && await inView('[data-testid=approve]'), 'requester bar and Approve on screen');
+    await frame.$eval('[data-testid=review-content]', (el) => { el.scrollTop = el.scrollHeight; });
+    check(await inView('[data-testid=requester]'), 'the requester bar stays while the request scrolls');
+    await shot(S.page, 'short-window');
+    await press(frame, '[data-testid=approve]');
+    const result = await pending;
+    check(result.ok, JSON.stringify(result));
+    await verifyAssertion(S, { credentialId, signature: result.value.signature, clientDataJson: result.value.clientDataJsonBase64, authenticatorData: result.value.authenticatorDataBase64 }, challenge);
+    return { frameHeight };
+  } finally {
+    await S.context.close();
+  }
+});
+
+await scenario('layout: a frame too small for the request keeps Approve off when scrolled to it', async () => {
+  const text = 'tiny frame';
+  const query = `action=sign&message=${b64url(messageChallenge(Buffer.from(text)))}&displayMessage=${encodeURIComponent(text)}&credentialId=${encodeURIComponent(credentialId)}`;
+  const pending = A.page.evaluate(([q]) => window.lk.raw(q, 15_000, 170), [query]);
+  const frame = await portalFrame(A.page);
+  await sleep(800);
+  const approveBelow = await frame.$eval('[data-testid=approve]', (el) => el.getBoundingClientRect().top >= window.innerHeight);
+  check(approveBelow, 'Approve starts below the frame');
+  await frame.$eval('[data-testid=page]', (page) => { page.scrollTop = page.scrollHeight; });
+  await frame.waitForSelector('[data-testid=approve][data-guard=not-visible]', { timeout: 5000 });
+  await shot(A.page, 'tiny-frame');
+  await frame.click('[data-testid=cancel]');
+  const reply = await pending;
+  check(reply.data?.type === 'error', JSON.stringify(reply));
+});
+
+await scenario('gesture: without visibility tracking (Safari, Firefox) a transaction needs an explicit confirmation; telemetry says so', async () => {
+  const U = await newPage({
+    url: `${DAPP}/`,
+    // The portal frame on a browser without IntersectionObserver v2.
+    portalInit: () => {
+      if (location.port === '4173' && typeof IntersectionObserverEntry !== 'undefined') delete IntersectionObserverEntry.prototype.isVisible;
+    },
+  });
+  try {
+    const { credentials } = await A.cdp.send('WebAuthn.getCredentials', { authenticatorId: A.authenticatorId });
+    await U.cdp.send('WebAuthn.addCredential', { authenticatorId: U.authenticatorId, credential: credentials[0] });
+    const before = logs.length;
+    const challenge = randomBytes(32);
+    const pending = U.page.evaluate(([ch, tx, c]) => window.lk.sign(ch, tx, c, 'devnet'), [b64url(challenge), previewTransaction(), credentialId]);
+    const frame = await portalFrame(U.page);
+    await frame.waitForSelector('[data-testid=confirm]');
+    await sleep(800);
+    check(await frame.isDisabled('[data-testid=approve]'), 'Approve off until confirmed');
+    await frame.check('[data-testid=confirm]');
+    await press(frame, '[data-testid=approve]');
+    const result = await pending;
+    check(result.ok, JSON.stringify(result));
+    await sleep(500);
+    const events = logs.slice(before).filter((l) => l.route === 'telemetry');
+    check(events.length > 0 && events.every((e) => e.visibility === 'untracked'), JSON.stringify(events.map((e) => e.visibility)));
+    return { visibility: 'untracked' };
+  } finally {
+    await U.context.close();
+  }
 });
 
 /** A raw request from dApp A: the refusal screen, then the error message after Close. */
@@ -452,7 +614,7 @@ await scenario('popup (Safari): connect creates a passkey and replies to the ope
     check((await popup.getAttribute('[data-testid=requester]', 'data-channel')) === 'popup', 'popup channel');
     check((await popup.textContent('[data-testid=requester-origin]')) === DAPP, 'requester from the referrer');
     await popup.fill('[data-testid=account-name]', 'Popup');
-    await popup.click('[data-testid=create]');
+    await press(popup, '[data-testid=create]');
     const result = await pending;
     check(result.ok && result.value.kind === 'created', JSON.stringify(result));
   } finally {
@@ -496,7 +658,7 @@ await scenario('redirect: signs and returns to the registered https callback wit
   const T = await topLevel(`action=sign&message=${b64url(messageChallenge(Buffer.from(text)))}&displayMessage=${encodeURIComponent(text)}&credentialId=${cred()}&redirect_url=${encodeURIComponent(`${DAPP}/callback?state=xyz`)}`);
   try {
     check((await T.page.textContent('[data-testid=requester-badge]')).includes('Registered'), 'registered destination');
-    await T.page.click('[data-testid=approve]');
+    await press(T.page, '[data-testid=approve]');
     await T.page.waitForURL(/\/callback\?/);
     const q = new URL(T.page.url()).searchParams;
     check(q.get('state') === 'xyz' && q.get('success') === 'true', 'callback query');
@@ -524,7 +686,7 @@ await scenario('redirect: an unregistered app scheme is shown as not registered 
   const query = `action=sign&message=${b64url(messageChallenge(Buffer.from('x')))}&displayMessage=x&credentialId=${cred()}&redirect_url=${encodeURIComponent('newapp://cb')}`;
   const T = await topLevel(query);
   try {
-    check((await T.page.textContent('[data-testid=requester-origin]')) === 'newapp://', 'scheme shown');
+    check((await T.page.textContent('[data-testid=requester-origin]')) === 'newapp://cb', 'the destination shown in full');
     check((await T.page.textContent('[data-testid=requester-badge]')).includes('Not registered'), 'badge');
     await T.page.waitForSelector('[data-testid=message-review]');
   } finally {
@@ -538,14 +700,64 @@ await scenario('redirect: an unregistered app scheme is shown as not registered 
   }
 });
 
-await scenario('headers: frame-ancestors from the registry; report-only in transition, enforced in enforce', async () => {
+await scenario('redirect: a browser hand-off scheme is refused in transition too, and Close goes nowhere', async () => {
+  const destination = 'x-safari-https://evil.example/cb';
+  const before = logs.length;
+  const T = await topLevel(`action=sign&message=${b64url(randomBytes(32))}&credentialId=${cred()}&redirect_url=${encodeURIComponent(destination)}`);
+  try {
+    await T.page.waitForSelector('[data-testid=refusal][data-reason=redirect-refused]');
+    await T.page.click('[data-testid=close]');
+    await T.page.waitForSelector('[data-testid=closed]');
+    check(T.page.url().startsWith(PORTAL_T), 'stayed on the portal');
+    await sleep(500);
+    const events = logs.slice(before).filter((l) => l.route === 'telemetry' && l.reason === 'redirect-refused');
+    check(events.length > 0 && events.every((e) => e.requester === 'x-safari-https://'), JSON.stringify(events.map((e) => e.requester)));
+    return { telemetry: events.map((e) => e.requester) };
+  } finally {
+    await T.context.close();
+  }
+});
+
+await scenario('redirect: a refusal is not sent to an unregistered app destination', async () => {
+  // Raw message bytes (refused) with an unregistered app scheme the transition policy would show.
+  const T = await topLevel(`action=sign&message=${Buffer.from('hello').toString('base64')}&credentialId=${cred()}&redirect_url=${encodeURIComponent('newapp://cb')}`);
+  try {
+    await T.page.waitForSelector('[data-testid=refusal][data-reason=unrecognised-format]');
+    const navigations = [];
+    T.page.on('framenavigated', (f) => navigations.push(f.url()));
+    await T.page.click('[data-testid=close]');
+    await T.page.waitForSelector('[data-testid=closed]');
+    await sleep(300);
+    check(T.page.url().startsWith(PORTAL_T) && navigations.every((u) => u.startsWith(PORTAL_T)), JSON.stringify(navigations));
+  } finally {
+    await T.context.close();
+  }
+});
+
+await scenario('headers: frame-ancestors from the registry and the content policy; report-only in transition, enforced in enforce', async () => {
   const t = await fetch(`${PORTAL_T}/`);
   const e = await fetch(`${PORTAL_E}/`);
-  check(t.headers.get('content-security-policy')?.startsWith('frame-ancestors https:'), 'transition enforces https ancestors');
-  check(t.headers.get('content-security-policy-report-only')?.includes(`frame-ancestors ${DAPP}`), 'transition reports others');
-  check(e.headers.get('content-security-policy')?.startsWith(`frame-ancestors ${DAPP} `), 'enforce lists registered origins');
+  const tEnforced = t.headers.get('content-security-policy');
+  const tReport = t.headers.get('content-security-policy-report-only');
+  const eEnforced = e.headers.get('content-security-policy');
+  check(tEnforced?.startsWith('frame-ancestors https:') && !tEnforced.includes('default-src'), 'transition enforces https ancestors only');
+  check(tReport?.includes(`frame-ancestors ${DAPP}`) && tReport.includes("default-src 'self'") && tReport.includes("object-src 'none'"), 'transition reports other embedders and content');
+  check(eEnforced?.startsWith(`frame-ancestors ${DAPP} `) && eEnforced.includes("default-src 'self'") && !e.headers.has('content-security-policy-report-only'), 'enforce lists registered origins and enforces content');
+  // The built page's inline script is the one the policy allows by hash.
+  const html = readFileSync(join(built.enforced.dist, 'index.html'), 'utf8');
+  const inline = /<script>([\s\S]*?)<\/script>/.exec(html)[1];
+  check(eEnforced.includes(`'sha256-${createHash('sha256').update(inline, 'utf8').digest('base64')}'`), 'inline recorder hash');
+  check(!/fonts\.googleapis|fonts\.gstatic/.test(html), 'no third-party stylesheet');
   check(!t.headers.has('x-frame-options') && !t.headers.has('cross-origin-opener-policy'), 'no XFO, no COOP');
-  return { transition: t.headers.get('content-security-policy'), enforce: e.headers.get('content-security-policy') };
+  return { transition: tEnforced, enforce: eEnforced.slice(0, 120) };
+});
+
+await scenario('content policy: nothing the pages loaded or ran was outside it (report-only and enforced builds)', async () => {
+  const content = cspConsole.filter((line) => !/frame-ancestors/.test(line));
+  check(content.length === 0, JSON.stringify(content.slice(0, 5)));
+  const reports = logs.filter((l) => l.route === 'csp-report' && l.directive !== 'frame-ancestors');
+  check(reports.length === 0, JSON.stringify(reports.slice(0, 5)));
+  return { consoleLines: cspConsole.length };
 });
 
 await scenario('no RPC key in the bundle or in any /api/rpc response; telemetry carries no signed data', async () => {

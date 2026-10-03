@@ -22,12 +22,12 @@ async function run(fn: (dm: DialogManager) => Promise<unknown>): Promise<Outcome
 const bytes = (list: number[]) => new Uint8Array(list);
 
 /** A frame showing `src`; resolves with the first message the frame posts, or a timeout. */
-function frame(src: string, timeoutMs = 20_000): Promise<{ origin?: string; data?: unknown; timeout?: true }> {
+function frame(src: string, timeoutMs = 20_000, height = 640): Promise<{ origin?: string; data?: unknown; timeout?: true }> {
   return new Promise((resolve) => {
     const iframe = document.createElement('iframe');
     iframe.allow = `publickey-credentials-get ${portalUrl}; publickey-credentials-create ${portalUrl}`;
     iframe.id = 'raw';
-    iframe.style.cssText = 'width:420px;height:640px;border:0';
+    iframe.style.cssText = `width:420px;height:${height}px;border:0`;
     const done = (value: { origin?: string; data?: unknown; timeout?: true }) => {
       window.removeEventListener('message', onMessage);
       clearTimeout(timer);
@@ -44,8 +44,8 @@ function frame(src: string, timeoutMs = 20_000): Promise<{ origin?: string; data
   });
 }
 
-/** The portal with a hand-made query, in a frame. */
-const raw = (query: string, timeoutMs?: number) => frame(`${portalUrl}/?${query}`, timeoutMs);
+/** The portal with a hand-made query, in a frame (`height` px tall). */
+const raw = (query: string, timeoutMs?: number, height?: number) => frame(`${portalUrl}/?${query}`, timeoutMs, height);
 /** A frame whose first page, on `bouncer`'s origin, navigates the frame to the portal. */
 const bounced = (bouncer: string, query: string, timeoutMs?: number) =>
   frame(`${bouncer}?to=${encodeURIComponent(`${portalUrl}/?${query}`)}`, timeoutMs);
