@@ -16,6 +16,8 @@
     "lint": "eslint .",
     "test": "node --test 'test/*.test.ts'",
     "typecheck:test": "tsc -p tsconfig.test.json",
+    "headers": "node scripts/gen-headers.mjs",
+    "headers:check": "node scripts/gen-headers.mjs --check",
     "preview": "vite preview"
   },
   "dependencies": {
