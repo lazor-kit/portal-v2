@@ -27,21 +27,54 @@ export interface AssertionFields {
   readonly authenticatorDataReturn: string;
 }
 
+interface ConnectedFields {
+  readonly type: 'connected';
+  readonly credentialId: string;
+  /** Compressed P-256 key, base64: from the registration, or stored for this exact credential. */
+  readonly publicKey?: string;
+  readonly accountName?: string;
+  readonly timestamp: number;
+}
+
+/**
+ * A connect result. `kind` says what the reply proves:
+ *
+ * - `created`: the passkey was registered just now, and `publicKey` is its own;
+ * - `asserted`: the sign-in signed the request's ownership proof, and
+ *   `assertion` is over it;
+ * - absent: a sign-in with no proof to sign. Then `publicKey`, if any, is the
+ *   key stored for this exact credential when it was registered here.
+ */
+export type ConnectedResult =
+  | (ConnectedFields & { readonly kind: 'created'; readonly publicKey: string; readonly assertion?: undefined })
+  | (ConnectedFields & { readonly kind: 'asserted'; readonly assertion: AssertionFields })
+  | (ConnectedFields & { readonly kind?: undefined; readonly assertion?: undefined });
+
 export type PortalResult =
-  | {
-      readonly type: 'connected';
-      readonly credentialId: string;
-      /** `created`: registered just now; `asserted`: signed in with an existing passkey. */
-      readonly kind: 'created' | 'asserted';
-      /** Compressed P-256 key, base64: from the registration, or stored for this exact credential. */
-      readonly publicKey?: string;
-      readonly accountName?: string;
-      /** Over the ownership-proof challenge the request carried. */
-      readonly assertion?: AssertionFields;
-      readonly timestamp: number;
-    }
+  | ConnectedResult
   | { readonly type: 'signed'; readonly credentialId: string; readonly assertion: AssertionFields; readonly timestamp: number }
   | { readonly type: 'error'; readonly code: string; readonly message: string };
+
+/**
+ * The result of a sign-in: `asserted` only with an assertion over the
+ * request's ownership proof; otherwise no `kind`, and the key stored for this
+ * exact credential, if one was.
+ */
+export function signInResult(input: {
+  credentialId: string;
+  assertion?: AssertionFields;
+  stored?: { readonly publicKey?: string; readonly name?: string };
+  timestamp: number;
+}): ConnectedResult {
+  const fields: ConnectedFields = {
+    type: 'connected',
+    credentialId: input.credentialId,
+    ...(input.stored?.publicKey ? { publicKey: input.stored.publicKey } : {}),
+    ...(input.stored?.name ? { accountName: input.stored.name } : {}),
+    timestamp: input.timestamp,
+  };
+  return input.assertion ? { ...fields, kind: 'asserted', assertion: input.assertion } : fields;
+}
 
 export type ReplyRoute =
   | { readonly channel: 'iframe' | 'popup'; readonly origin: string }
@@ -77,7 +110,7 @@ export function messageFor(result: PortalResult): Record<string, unknown> {
         type: 'WALLET_CONNECTED',
         data: {
           credentialId: result.credentialId,
-          kind: result.kind,
+          ...(result.kind ? { kind: result.kind } : {}),
           connectionType: result.kind === 'created' ? 'create' : 'get',
           timestamp: result.timestamp,
           ...(result.publicKey ? { publickey: result.publicKey, publicKey: result.publicKey } : {}),
@@ -119,7 +152,7 @@ export function redirectUrlFor(destination: URL, result: PortalResult, legacyExp
   params.set('platform', legacyExpo ? 'mobile' : 'web');
   if (result.type === 'connected') {
     params.set('type', 'WALLET_CONNECTED');
-    params.set('kind', result.kind);
+    if (result.kind) params.set('kind', result.kind);
     if (result.publicKey) params.set('publicKey', result.publicKey);
     if (result.accountName) params.set('accountName', result.accountName);
     if (result.assertion) setAssertion(params, result.assertion);

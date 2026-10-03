@@ -1,0 +1,24 @@
+{
+  "name": "@lazorkit/portal-compat",
+  "private": true,
+  "type": "module",
+  "description": "The portal's request handling and replies, read by released versions of @lazorkit/wallet",
+  "packageManager": "pnpm@10.26.0",
+  "engines": {
+    "node": "24.x",
+    "pnpm": "10.26.0"
+  },
+  "scripts": {
+    "test": "node --test --test-force-exit 'test/*.test.mjs'"
+  },
+  "devDependencies": {
+    "@solana/web3.js": "1.99.0",
+    "jsdom": "26.1.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "wallet-2.0.1": "npm:@lazorkit/wallet@2.0.1",
+    "wallet-2.1.0": "npm:@lazorkit/wallet@2.1.0",
+    "wallet-3.3.0": "npm:@lazorkit/wallet@3.3.0",
+    "zustand": "5.0.5"
+  }
+}

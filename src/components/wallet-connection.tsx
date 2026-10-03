@@ -5,16 +5,14 @@ import { Input } from "@/components/ui/input"
 import { ceremonyErrorText, createPasskey, signIn } from "@/utils/webauthn"
 import { rememberCredential, storedCredential } from "@/utils/storage"
 import { isTrustedActivation, useActivationGuard } from "@/security/gesture"
-import type { PortalResult } from "@/security/reply"
-
-type Connected = Extract<PortalResult, { type: "connected" }>
+import { signInResult, type ConnectedResult } from "@/security/reply"
 
 interface WalletConnectionProps {
   /** The ownership-proof challenge to sign while signing in, when the request carried one. */
   proof: Uint8Array | null
   requesterLabel: string
   framed: boolean
-  onConnected: (result: Connected) => void
+  onConnected: (result: ConnectedResult) => void
   onCancel: () => void
 }
 
@@ -34,17 +32,9 @@ export function WalletConnection({ proof, requesterLabel, framed, onConnected, o
     setError(null)
     try {
       const { credentialId, assertion } = await signIn(proof)
-      // A key is reported only when it was stored for this very passkey.
-      const stored = storedCredential(credentialId)
-      onConnected({
-        type: "connected",
-        credentialId,
-        kind: "asserted",
-        publicKey: stored?.publicKey,
-        accountName: stored?.name,
-        assertion,
-        timestamp: Date.now(),
-      })
+      // `asserted` only with the assertion over the proof; a key only when
+      // it was stored for this very passkey.
+      onConnected(signInResult({ credentialId, assertion, stored: storedCredential(credentialId), timestamp: Date.now() }))
     } catch (e) {
       setError(ceremonyErrorText(e))
     } finally {

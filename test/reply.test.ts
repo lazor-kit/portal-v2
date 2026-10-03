@@ -2,7 +2,7 @@
 // in the shapes the SDKs read. Run with `pnpm test`.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { messageFor, redirectUrlFor, routeFor, sendReply, type AssertionFields, type PortalResult, type ReplyWindow } from '../src/security/reply.ts';
+import { messageFor, redirectUrlFor, refusalRoute, routeFor, sendReply, signInResult, type AssertionFields, type PortalResult, type ReplyWindow } from '../src/security/reply.ts';
 import { checkRedirect } from '../src/security/redirect.ts';
 import type { Registry } from '../src/security/registry.ts';
 import { resolveRequester, type RequesterInput } from '../src/security/requester.ts';
@@ -88,6 +88,25 @@ test('redirect: only to a destination the check allowed', () => {
   assert.deepEqual(routeFor(resolveRequester({ ...base, redirectUrl: 'evil://x' }), refusedDestination), { channel: 'none' });
 });
 
+test('a refusal goes back to the requesting origin or a registered destination, never to one the request chose', () => {
+  const lenient = { unregisteredSchemes: 'allow', unregisteredWeb: 'same-origin', deniedSchemes: [] } as const;
+  // Allowed to be shown (unregistered, in transition), but not where a refusal is sent.
+  const unregistered = checkRedirect('newapp://evil.example/cb', { registry, policy: lenient, requesterOrigin: null });
+  const route = routeFor(resolveRequester({ ...base, redirectUrl: 'newapp://evil.example/cb' }), unregistered);
+  assert.equal(route.channel, 'redirect');
+  assert.deepEqual(refusalRoute(route, unregistered), { channel: 'none' });
+  const { win, events } = fakeWindow();
+  assert.equal(sendReply(refusalRoute(route, unregistered), refused, win), 'dropped');
+  assert.deepEqual(events, []);
+  // A registered destination gets the error.
+  const registered = checkRedirect('acme://callback', { registry, policy: lenient, requesterOrigin: null });
+  const registeredRoute = routeFor(resolveRequester({ ...base, redirectUrl: 'acme://callback' }), registered);
+  assert.deepEqual(refusalRoute(registeredRoute, registered), registeredRoute);
+  // Frames and popups: the requesting origin, as for any reply.
+  const frameRoute = routeFor(resolveRequester({ ...base, framed: true, ancestorOrigins: ['https://app.acme.example'] }));
+  assert.deepEqual(refusalRoute(frameRoute), frameRoute);
+});
+
 // ─── Shapes the web SDK reads (DialogManager 3.x) ───────────────────────────
 
 test('postMessage payloads: WALLET_CONNECTED, SIGNATURE_CREATED and error', () => {
@@ -107,6 +126,32 @@ test('postMessage payloads: WALLET_CONNECTED, SIGNATURE_CREATED and error', () =
     { kind: 'created', connectionType: 'create', publickey: 'AkEy', publicKey: 'AkEy', accountName: 'Alice' },
   );
   assert.deepEqual(messageFor(refused), { type: 'error', error: { message: 'Message does not match', code: 'display-text-mismatch' } });
+});
+
+test('sign-in: kind "asserted" only with the assertion over the proof; otherwise no kind, and only a key stored for this credential', () => {
+  const withProof = signInResult({ credentialId: 'Y3JlZA==', assertion, stored: { publicKey: 'AkEy', name: 'Alice' }, timestamp: 4 });
+  assert.equal(withProof.kind, 'asserted');
+  const proved = messageFor(withProof) as { data: Record<string, unknown> };
+  assert.equal(proved.data.kind, 'asserted');
+  assert.equal(proved.data.normalized, 'c2ln');
+  assert.equal(proved.data.publickey, 'AkEy');
+
+  // No proof was asked for (or it was not in the proof format): nothing was
+  // proven, so the reply claims nothing. An SDK then takes the stored key,
+  // which is this credential's own, without a second prompt.
+  const withoutProof = signInResult({ credentialId: 'Y3JlZA==', stored: { publicKey: 'AkEy' }, timestamp: 5 });
+  assert.equal(withoutProof.kind, undefined);
+  const plain = messageFor(withoutProof) as { data: Record<string, unknown> };
+  assert.deepEqual(plain.data, { credentialId: 'Y3JlZA==', connectionType: 'get', timestamp: 5, publickey: 'AkEy', publicKey: 'AkEy' });
+  assert.equal('kind' in plain.data, false);
+  const query = new URL(redirectUrlFor(new URL('myapp://callback'), withoutProof)).searchParams;
+  assert.equal(query.get('kind'), null);
+  assert.equal(query.get('signature'), null);
+  assert.equal(query.get('publicKey'), 'AkEy');
+
+  // Nothing stored for this credential: no key at all.
+  const bare = messageFor(signInResult({ credentialId: 'Y3JlZA==', timestamp: 6 })) as { data: Record<string, unknown> };
+  assert.deepEqual(bare.data, { credentialId: 'Y3JlZA==', connectionType: 'get', timestamp: 6 });
 });
 
 // ─── Query fields the mobile adapter reads (parseResult.ts, handleRedirect.ts) ─
