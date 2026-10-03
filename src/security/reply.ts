@@ -58,6 +58,17 @@ export function routeFor(requester: Requester, redirect?: RedirectDecision, lega
   return { channel: 'none' };
 }
 
+/**
+ * Where the answer to a refused request goes: the requesting origin, or a
+ * registered redirect destination. A destination that is not registered is
+ * not navigated to for a refusal, so a refused request never sends the user
+ * to an address it chose itself.
+ */
+export function refusalRoute(route: ReplyRoute, redirect?: RedirectDecision): ReplyRoute {
+  if (route.channel !== 'redirect') return route;
+  return redirect?.ok && redirect.registered ? route : { channel: 'none' };
+}
+
 /** The postMessage payload. */
 export function messageFor(result: PortalResult): Record<string, unknown> {
   switch (result.type) {

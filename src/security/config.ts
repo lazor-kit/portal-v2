@@ -3,7 +3,7 @@
  * does not pass is a build and test failure, never a silently looser portal.
  */
 import type { Gate, PortalPolicy } from './policy.ts';
-import { ALWAYS_DENIED_SCHEMES } from './redirect.ts';
+import { isAlwaysDeniedScheme } from './redirect.ts';
 import type { RegisteredApp, Registry } from './registry.ts';
 import { isLoopback, webOrigin } from './requester.ts';
 
@@ -66,7 +66,7 @@ function checkRedirectPrefix(file: string, id: string, prefix: unknown): string 
   if (typeof prefix !== 'string' || !prefix) throw new ConfigError(file, `${id}: redirects must be strings`);
   const schemeOnly = /^([a-z][a-z0-9+.-]*):(\/\/)?$/i.exec(prefix);
   const scheme = (schemeOnly ? schemeOnly[1] : prefix.split(':')[0]).toLowerCase();
-  if (ALWAYS_DENIED_SCHEMES.includes(scheme)) throw new ConfigError(file, `${id}: ${scheme}: is never a redirect destination`);
+  if (isAlwaysDeniedScheme(scheme)) throw new ConfigError(file, `${id}: ${scheme}: is never a redirect destination`);
   if (schemeOnly) {
     if (scheme === 'http' || scheme === 'https') throw new ConfigError(file, `${id}: register a web destination with its origin, not "${prefix}"`);
     return prefix;

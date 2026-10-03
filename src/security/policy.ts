@@ -5,7 +5,7 @@
  * Loaded from config/portal-policy.json at build time.
  */
 import type { ClassifiedChallenge, RefusalReason } from './challenge.ts';
-import type { RedirectDecision, RedirectPolicy } from './redirect.ts';
+import { destinationLabel, type RedirectDecision, type RedirectPolicy } from './redirect.ts';
 import type { RegisteredApp, Registry } from './registry.ts';
 import { appForOrigin } from './registry.ts';
 import type { Requester } from './requester.ts';
@@ -62,7 +62,7 @@ export type Decision =
   | {
       readonly outcome: 'show';
       readonly app?: RegisteredApp;
-      /** What the screen names as the requester: an origin, or a redirect destination. */
+      /** What the screen names as the requester: an origin, or a redirect destination (an app scheme with its host and path). */
       readonly requesterLabel: string;
       readonly warnings: readonly Warning[];
     }
@@ -109,7 +109,7 @@ export function decide(input: {
     case 'redirect':
       if (!redirect || !redirect.ok) return { outcome: 'refuse', reason: 'redirect-refused' };
       app = redirect.app;
-      label = redirect.url.protocol === 'https:' || redirect.url.protocol === 'http:' ? redirect.url.origin : `${redirect.url.protocol}//`;
+      label = destinationLabel(redirect.url);
       if (requester.openedFrom) warnings.push('opened-from-web');
       break;
     case 'webview':

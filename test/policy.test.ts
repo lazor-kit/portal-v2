@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { classifyChallenge, messageChallengeFor } from '../src/security/challenge.ts';
 import { decide, type PortalPolicy } from '../src/security/policy.ts';
-import { checkRedirect, type RedirectPolicy } from '../src/security/redirect.ts';
+import { ALWAYS_DENIED_SCHEMES, checkRedirect, destinationLabel, isAlwaysDeniedScheme, type RedirectPolicy } from '../src/security/redirect.ts';
 import type { Registry } from '../src/security/registry.ts';
 import { resolveRequester, type RequesterInput } from '../src/security/requester.ts';
 
@@ -106,25 +106,69 @@ test('redirect: registered destinations, with path boundaries', () => {
   assert.equal(checkRedirect('acme://callback?x=1', ctx).ok, true);
   assert.equal(checkRedirect('https://app.acme.example/callback', ctx).ok, true);
   assert.equal(checkRedirect('https://app.acme.example/callback/done?x', ctx).ok, true);
-  assert.deepEqual(checkRedirect('https://app.acme.example/callbackx', ctx), { ok: false, reason: 'unregistered-destination' });
-  assert.deepEqual(checkRedirect('https://app.acme.example.elsewhere.example/callback', ctx), { ok: false, reason: 'unregistered-destination' });
-  assert.deepEqual(checkRedirect('other://cb', ctx), { ok: false, reason: 'unregistered-destination' });
+  assert.deepEqual(checkRedirect('https://app.acme.example/callbackx', ctx), { ok: false, reason: 'unregistered-destination', destination: 'https://app.acme.example' });
+  assert.deepEqual(checkRedirect('https://app.acme.example.elsewhere.example/callback', ctx), { ok: false, reason: 'unregistered-destination', destination: 'https://app.acme.example.elsewhere.example' });
+  assert.deepEqual(checkRedirect('other://cb', ctx), { ok: false, reason: 'unregistered-destination', destination: 'other://' });
 });
 
 test('redirect: dangerous schemes, plain http and embedded credentials are always refused', () => {
   const ctx = { registry, policy: redirectPolicy, requesterOrigin: 'https://app.acme.example' };
   for (const url of ['javascript:alert(1)', 'data:text/html,x', 'blob:https://x/y', 'file:///etc/passwd', 'intent://x#Intent;end', 'JavaScript:alert(1)']) {
-    assert.deepEqual(checkRedirect(url, ctx), { ok: false, reason: 'denied-scheme' }, url);
+    const d = checkRedirect(url, ctx);
+    assert.equal(!d.ok && d.reason, 'denied-scheme', url);
   }
-  assert.deepEqual(checkRedirect('http://elsewhere.example/cb', ctx), { ok: false, reason: 'insecure-http' });
-  assert.deepEqual(checkRedirect('https://user:pw@app.acme.example/callback', ctx), { ok: false, reason: 'invalid-url' });
-  assert.deepEqual(checkRedirect('not a url', ctx), { ok: false, reason: 'invalid-url' });
+  assert.deepEqual(checkRedirect('http://elsewhere.example/cb', ctx), { ok: false, reason: 'insecure-http', destination: 'http://elsewhere.example' });
+  assert.deepEqual(checkRedirect('https://user:pw@app.acme.example/callback', ctx), { ok: false, reason: 'invalid-url', destination: 'https://app.acme.example' });
+  assert.deepEqual(checkRedirect('not a url', ctx), { ok: false, reason: 'invalid-url', destination: null });
+});
+
+test('redirect: schemes that hand a URL to a browser are refused, registered or not, under every policy', () => {
+  const handOff = [
+    'x-safari-https://evil.example/cb',
+    'x-safari-http://evil.example/cb',
+    'googlechromes://evil.example/cb',
+    'googlechrome://navigate?url=https://evil.example/cb',
+    'firefox://open-url?url=https%3A%2F%2Fevil.example%2Fcb',
+    'firefox-focus://open-url?url=https%3A%2F%2Fevil.example%2Fcb',
+    'microsoft-edge-https://evil.example/cb',
+    'opera-https://evil.example/cb',
+    'brave://open-url?url=https://evil.example/cb',
+    'duckduckgo://evil.example/cb',
+    'android-app://com.android.chrome/https/evil.example/cb',
+    'X-Safari-HTTPS://evil.example/cb',
+    // Any scheme named like a browser's http(s) hand-off.
+    'newbrowser-https://evil.example/cb',
+    'mailto:someone@evil.example',
+  ];
+  const lenient: RedirectPolicy = { unregisteredSchemes: 'allow', unregisteredWeb: 'same-origin', deniedSchemes: [] };
+  const withHandOff: Registry = { version: 1, apps: [{ id: 'x', name: 'X', redirects: ['x-safari-https://', 'googlechromes://'] }] };
+  for (const url of handOff) {
+    for (const reg of [registry, withHandOff]) {
+      const d = checkRedirect(url, { registry: reg, policy: lenient, requesterOrigin: 'https://evil.example' });
+      assert.equal(!d.ok && d.reason, 'denied-scheme', url);
+      assert.ok(!d.ok && d.destination?.endsWith('://') && !d.destination.includes('evil'), 'named by scheme only');
+    }
+  }
+  for (const scheme of ALWAYS_DENIED_SCHEMES) assert.ok(isAlwaysDeniedScheme(scheme), scheme);
+  for (const ok of ['acme', 'newapp', 'com.example.app', 'exp', 'exp+myapp', 'https', 'http']) assert.ok(!isAlwaysDeniedScheme(ok), ok);
+});
+
+test('redirect: an app destination is shown in full (scheme, host and path), never as the bare scheme', () => {
+  assert.equal(destinationLabel(new URL('newapp://evil.example/cb?signature=x#y')), 'newapp://evil.example/cb');
+  assert.equal(destinationLabel(new URL('acme://')), 'acme://');
+  assert.equal(destinationLabel(new URL('myapp:///callback')), 'myapp:///callback');
+  assert.equal(destinationLabel(new URL('com.example.app:/oauth')), 'com.example.app:/oauth');
+  assert.equal(destinationLabel(new URL('https://app.acme.example/callback?x=1')), 'https://app.acme.example');
+  const requester = resolveRequester({ ...base, redirectUrl: 'newapp://evil.example/cb?x=1' });
+  const redirect = checkRedirect('newapp://evil.example/cb?x=1', { registry, policy: redirectPolicy, requesterOrigin: null });
+  const d = decide({ challenge: message, requester, redirect, registry, policy: transition });
+  assert.equal(d.outcome === 'show' && d.requesterLabel, 'newapp://evil.example/cb');
 });
 
 test('redirect: interim rule allows https only to the requesting origin, and unregistered schemes as unregistered', () => {
   const ctx = { registry, policy: redirectPolicy, requesterOrigin: 'https://shop.example' };
   assert.equal(checkRedirect('https://shop.example/done', ctx).ok, true);
-  assert.deepEqual(checkRedirect('https://elsewhere.example/collect', ctx), { ok: false, reason: 'unregistered-destination' });
+  assert.deepEqual(checkRedirect('https://elsewhere.example/collect', ctx), { ok: false, reason: 'unregistered-destination', destination: 'https://elsewhere.example' });
   const custom = checkRedirect('newapp://cb', ctx);
   assert.equal(custom.ok && custom.registered, false);
 });
@@ -159,7 +203,7 @@ test('redirect channel: the destination decides, and a refused one refuses the r
   const requester = resolveRequester({ ...base, redirectUrl: 'acme://cb' });
   const redirect = checkRedirect('acme://cb', { registry, policy: enforce.redirects, requesterOrigin: null });
   const d = decide({ challenge: approval, requester, redirect, registry, policy: enforce });
-  assert.equal(d.outcome === 'show' && d.requesterLabel, 'acme://');
+  assert.equal(d.outcome === 'show' && d.requesterLabel, 'acme://cb');
   const unknown = resolveRequester({ ...base, redirectUrl: 'https://elsewhere.example/c' });
   const refused = checkRedirect('https://elsewhere.example/c', { registry, policy: enforce.redirects, requesterOrigin: null });
   assert.deepEqual(decide({ challenge: message, requester: unknown, redirect: refused, registry, policy: enforce }), { outcome: 'refuse', reason: 'redirect-refused' });

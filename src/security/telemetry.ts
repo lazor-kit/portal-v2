@@ -4,10 +4,12 @@
  *
  * An event names the requester by origin (or "scheme://" for an app) and
  * never carries the challenge, credential, key, signature, message text,
- * transaction, or the path or query of any URL.
+ * transaction, or the path or query of any URL. A refused redirect is named
+ * the same way, by its destination's origin or scheme, so the apps it
+ * affects can be found and registered.
  */
 import type { Decision, PortalPolicy, Subject } from './policy.ts';
-import type { RedirectDecision } from './redirect.ts';
+import { destinationName, type RedirectDecision } from './redirect.ts';
 import type { Channel, OriginEvidence, Requester } from './requester.ts';
 
 export type Outcome = 'shown' | 'refused' | 'approved' | 'rejected' | 'failed' | 'undelivered';
@@ -36,9 +38,8 @@ export interface TelemetryEvent {
 /** The requester as telemetry names it: an origin, or a redirect's scheme. */
 export function requesterName(requester: Requester, redirect?: RedirectDecision): string | null {
   if (requester.channel === 'redirect') {
-    if (!redirect?.ok) return null;
-    const { protocol } = redirect.url;
-    return protocol === 'https:' || protocol === 'http:' ? redirect.url.origin : `${protocol}//`;
+    if (!redirect) return null;
+    return redirect.ok ? destinationName(redirect.url) : redirect.destination;
   }
   return requester.origin;
 }
