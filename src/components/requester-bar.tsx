@@ -2,7 +2,7 @@ import { Globe, Smartphone } from "lucide-react"
 
 export interface RequesterView {
   readonly channel: "iframe" | "popup" | "redirect" | "webview" | "none"
-  /** An origin (https://app.example), "scheme://" for an app, or null when unknown. */
+  /** An origin (https://app.example), an app destination ("myapp://callback"), or null when unknown. */
   readonly label: string | null
   /** The registered app's name, when the requester is registered. */
   readonly appName?: string
@@ -19,7 +19,7 @@ export function RequesterBar({ view }: { view: RequesterView }) {
   const redirect = view.channel === "redirect"
   const Icon = redirect && view.label && !view.label.startsWith("http") ? Smartphone : Globe
   return (
-    <div className="rounded-lg border border-border/50 bg-muted/30 px-3 py-2 space-y-1" data-testid="requester" data-evidence={view.evidence} data-channel={view.channel}>
+    <div className="shrink-0 rounded-lg border border-border/50 bg-muted/30 px-3 py-2 space-y-1" data-testid="requester" data-evidence={view.evidence} data-channel={view.channel}>
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <Icon className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />

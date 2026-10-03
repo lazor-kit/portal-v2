@@ -1,14 +1,14 @@
 import { Loader2 } from "lucide-react"
 import type { MouseEvent } from "react"
 import { Button } from "@/components/ui/button"
-import { isTrustedActivation, useActivationGuard } from "@/security/gesture"
+import { useActivationGuard } from "@/security/gesture"
 
 interface ApproveButtonsProps {
   onApprove: () => void
   onCancel: () => void
   framed: boolean
   busy?: boolean
-  /** Further reason to keep Approve off (an unticked confirmation, say). */
+  /** Further reason to keep Approve off (an unticked confirmation, a preview still loading). */
   disabled?: boolean
   approveLabel?: string
   /** Approve as the secondary button, Cancel as the primary (a failed simulation). */
@@ -17,11 +17,11 @@ interface ApproveButtonsProps {
 
 /** Cancel and Approve; Approve acts only on a real, visible click (see security/gesture). */
 export function ApproveButtons({ onApprove, onCancel, framed, busy = false, disabled = false, approveLabel = "Approve", discourage = false }: ApproveButtonsProps) {
-  const guard = useActivationGuard(framed, !busy)
+  const guard = useActivationGuard({ framed, active: !busy && !disabled })
   const ready = guard.state === "ready"
 
   const approve = (event: MouseEvent<HTMLButtonElement>) => {
-    if (!ready || disabled || busy || !isTrustedActivation(event.nativeEvent)) return
+    if (!ready || !guard.canActivate(event.nativeEvent)) return
     onApprove()
   }
 
@@ -29,9 +29,8 @@ export function ApproveButtons({ onApprove, onCancel, framed, busy = false, disa
   const primary = "w-full font-semibold py-2 rounded-lg h-10 text-sm"
 
   return (
-    <div className="space-y-1.5 pt-1">
-      {/* Observed as a whole: a disabled button is drawn faded, which would read as not visible. */}
-      <div ref={guard.ref} className="grid grid-cols-2 gap-2">
+    <div className="shrink-0 space-y-1.5 pt-1">
+      <div className="grid grid-cols-2 gap-2">
         <Button variant={discourage ? "default" : "outline"} onClick={onCancel} disabled={busy} className={discourage ? primary : secondary} data-testid="cancel">
           Cancel
         </Button>
@@ -51,11 +50,16 @@ export function ApproveButtons({ onApprove, onCancel, framed, busy = false, disa
           ) : approveLabel}
         </Button>
       </div>
-      {guard.state === "not-visible" && !busy && (
-        <p className="text-[10px] text-yellow-500 text-center leading-tight">
-          This window is covered or not fully visible. Make sure nothing is on top of it to continue.
-        </p>
-      )}
+      {guard.state === "not-visible" && !busy && <NotVisibleNotice />}
     </div>
+  )
+}
+
+/** Shown while the decision surface is covered, partly off screen, or too small to show whole. */
+export function NotVisibleNotice() {
+  return (
+    <p className="text-[10px] text-yellow-500 text-center leading-tight" data-testid="not-visible">
+      This window is covered, partly off screen, or too small. Make sure all of it is visible to continue.
+    </p>
   )
 }

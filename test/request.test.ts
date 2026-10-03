@@ -13,6 +13,7 @@ import { readPortalRequest } from '../src/security/params.ts';
 import type { PortalPolicy } from '../src/security/policy.ts';
 import { evaluateRequest } from '../src/security/request.ts';
 import { resolveRequester, type RequesterInput } from '../src/security/requester.ts';
+import { checkRedirect } from '../src/security/redirect.ts';
 import { buildEvent } from '../src/security/telemetry.ts';
 
 const SELF = 'https://portal.example';
@@ -184,7 +185,7 @@ test('a telemetry event names the requester by origin and carries nothing that w
   const requester = resolveRequester({ ...base, redirectUrl: request.redirectUrl });
   const redirect = { ok: true as const, url: new URL(request.redirectUrl!), registered: true, app: registry.apps[0] };
   const e = evaluateRequest({ request, requester, redirect, registry, policy });
-  const event = buildEvent({ policy, event: 'result', action: 'sign', requester, redirect, subject: e.subject, decision: e.decision, outcome: 'approved', browser: 'chrome' });
+  const event = buildEvent({ policy, event: 'result', action: 'sign', requester, redirect, subject: e.subject, decision: e.decision, outcome: 'approved', browser: 'chrome', visibility: 'top-level' });
   assert.equal(event.requester, 'acme://');
   assert.equal(event.app, 'acme');
   const json = JSON.stringify(event);
@@ -193,6 +194,28 @@ test('a telemetry event names the requester by origin and carries nothing that w
     assert.ok(!json.includes(secret), secret);
   }
   assert.deepEqual(Object.keys(event).sort(), [
-    'action', 'app', 'browser', 'channel', 'cluster', 'clusterSource', 'embedded', 'event', 'evidence', 'kind', 'outcome', 'reason', 'registered', 'requester', 'stage', 'v', 'warnings',
+    'action', 'app', 'browser', 'channel', 'cluster', 'clusterSource', 'embedded', 'event', 'evidence', 'kind', 'outcome', 'reason', 'registered', 'requester', 'stage', 'v', 'visibility', 'warnings',
   ]);
+});
+
+test('a refused redirect names its destination by origin or scheme only, so the app can be found', () => {
+  const ctx = { registry, policy: enforce.redirects, requesterOrigin: null };
+  for (const [destination, named] of [
+    ['https://shop.example/callback/done?token=SECRET', 'https://shop.example'],
+    ['newapp://evil.example/cb?token=SECRET', 'newapp://'],
+    ['x-safari-https://evil.example/cb?token=SECRET', 'x-safari-https://'],
+    ['not a url SECRET', null],
+  ] as const) {
+    const search = `${signMessageUrl('hi')}&redirect_url=${encodeURIComponent(destination)}`;
+    const request = readPortalRequest(search);
+    const requester = resolveRequester({ ...base, redirectUrl: request.redirectUrl });
+    const redirect = checkRedirect(request.redirectUrl!, { ...ctx, policy: { ...ctx.policy, unregisteredSchemes: 'deny', unregisteredWeb: 'deny' } });
+    const e = evaluateRequest({ request, requester, redirect, registry, policy: enforce });
+    assert.deepEqual(e.decision, { outcome: 'refuse', reason: 'redirect-refused' });
+    const event = buildEvent({ policy: enforce, event: 'request', action: 'sign', requester, redirect, subject: e.subject, decision: e.decision, outcome: 'refused', browser: 'safari-mobile', visibility: 'top-level' });
+    assert.equal(event.requester, named, destination);
+    assert.equal(event.reason, 'redirect-refused');
+    const json = JSON.stringify(event);
+    for (const secret of ['SECRET', '/cb', 'callback', 'evil.example']) assert.ok(!json.includes(secret), secret);
+  }
 });

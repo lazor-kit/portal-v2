@@ -4,8 +4,9 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ceremonyErrorText, createPasskey, signIn } from "@/utils/webauthn"
 import { rememberCredential, storedCredential } from "@/utils/storage"
-import { isTrustedActivation, useActivationGuard } from "@/security/gesture"
+import { useActivationGuard } from "@/security/gesture"
 import { signInResult, type ConnectedResult } from "@/security/reply"
+import { NotVisibleNotice } from "@/components/approve-buttons"
 
 interface WalletConnectionProps {
   /** The ownership-proof challenge to sign while signing in, when the request carried one. */
@@ -23,11 +24,11 @@ export function WalletConnection({ proof, requesterLabel, framed, onConnected, o
   const [accountName, setAccountName] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const guard = useActivationGuard(framed, !busy)
+  const guard = useActivationGuard({ framed, active: !busy })
   const ready = guard.state === "ready" && !busy
 
   const handleSignIn = async (event: MouseEvent<HTMLButtonElement>) => {
-    if (!ready || !isTrustedActivation(event.nativeEvent)) return
+    if (!ready || !guard.canActivate(event.nativeEvent)) return
     setBusy(true)
     setError(null)
     try {
@@ -45,7 +46,7 @@ export function WalletConnection({ proof, requesterLabel, framed, onConnected, o
   const handleCreate = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const submitter = (event.nativeEvent as SubmitEvent).submitter
-    if (!ready || !isTrustedActivation(event.nativeEvent) || !submitter) return
+    if (!ready || !guard.canActivate(event.nativeEvent) || !submitter) return
     const name = accountName.trim().slice(0, MAX_NAME)
     if (!name) return
     setBusy(true)
@@ -62,7 +63,7 @@ export function WalletConnection({ proof, requesterLabel, framed, onConnected, o
   }
 
   return (
-    <div className="flex flex-col items-center justify-center w-full space-y-6 py-2" data-testid="connect">
+    <div className="flex min-h-[7.5rem] flex-1 flex-col items-center w-full space-y-6 overflow-y-auto py-2" data-testid="connect">
       <div className="w-full space-y-1 text-center">
         <h1 className="text-base font-bold text-foreground">Connect with passkey</h1>
         <p className="text-xs text-muted-foreground">
@@ -75,7 +76,7 @@ export function WalletConnection({ proof, requesterLabel, framed, onConnected, o
         </p>
       </div>
 
-      <div ref={guard.ref} className="w-full space-y-5">
+      <div className="w-full space-y-5">
         <Button
           onClick={handleSignIn}
           disabled={!ready}
@@ -109,17 +110,13 @@ export function WalletConnection({ proof, requesterLabel, framed, onConnected, o
             disabled={busy}
             data-testid="account-name"
           />
-          <Button type="submit" variant="outline" className="w-full h-11 font-medium rounded-xl" disabled={!ready || !accountName.trim()} data-testid="create">
+          <Button type="submit" variant="outline" className="w-full h-11 font-medium rounded-xl" disabled={!ready || !accountName.trim()} data-testid="create" data-guard={guard.state}>
             Create new account
           </Button>
         </form>
       </div>
 
-      {guard.state === "not-visible" && !busy && (
-        <p className="text-[10px] text-yellow-500 text-center leading-tight">
-          This window is covered or not fully visible. Make sure nothing is on top of it to continue.
-        </p>
-      )}
+      {guard.state === "not-visible" && !busy && <NotVisibleNotice />}
       {error && <p className="text-xs text-red-500 text-center" role="alert" data-testid="connect-error">{error}</p>}
 
       <button type="button" onClick={onCancel} className="text-xs text-muted-foreground underline-offset-4 hover:underline" data-testid="cancel">

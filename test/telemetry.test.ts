@@ -10,7 +10,7 @@ test('telemetry keeps the listed fields only, from the portal origin only', asyn
   const event = {
     v: 1, stage: 'transition', event: 'result', action: 'sign', channel: 'iframe', evidence: 'ancestor-origins',
     requester: 'https://app.example', registered: false, app: null, kind: 'message', outcome: 'approved', reason: null,
-    warnings: ['unregistered-requester'], cluster: null, clusterSource: null, browser: 'chrome', embedded: false,
+    warnings: ['unregistered-requester'], cluster: null, clusterSource: null, browser: 'chrome', embedded: false, visibility: 'untracked',
     // Fields a page must never send; dropped if one does.
     challenge: 'SECRET', credentialId: 'SECRET', displayMessage: 'SECRET',
   };
@@ -24,4 +24,17 @@ test('telemetry keeps the listed fields only, from the portal origin only', asyn
   assert.ok(!JSON.stringify(lines).includes('SECRET'));
   assert.equal(lines[1].requester, null, 'a requester with a path is dropped');
   assert.equal(lines[0].requester, 'https://app.example');
+  assert.equal(lines[0].visibility, 'untracked');
+  assert.equal((await post({ ...event, visibility: 'SECRET' })).status, 204);
+  assert.equal(lines[2].visibility, null);
+});
+
+test('telemetry from a page of the domain serving the route is accepted (a staging domain)', async () => {
+  const lines: Record<string, unknown>[] = [];
+  const staging = 'https://portal-staging.lazor.example';
+  const post = (origin: string) =>
+    handleTelemetry(new Request(`${staging}/api/telemetry`, { method: 'POST', headers: { origin }, body: JSON.stringify({ v: 1, event: 'request', outcome: 'shown' }) }), { env: {}, log: (l) => lines.push(l) });
+  assert.equal((await post(staging)).status, 204);
+  assert.equal((await post('https://elsewhere.example')).status, 403);
+  assert.equal(lines.length, 1);
 });

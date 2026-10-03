@@ -35,6 +35,7 @@ const ENUMS: Record<string, readonly string[]> = {
   outcome: ['shown', 'refused', 'approved', 'rejected', 'failed', 'undelivered'],
   cluster: ['mainnet', 'devnet'],
   clusterSource: ['request', 'default', 'preview'],
+  visibility: ['tracked', 'untracked', 'top-level'],
 };
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const ORIGIN = /^https?:\/\/[A-Za-z0-9.-]+(:\d{1,5})?$/;
@@ -79,6 +80,7 @@ export function cleanEvent(body: unknown): Record<string, unknown> | null {
     clusterSource: pickEnum('clusterSource'),
     browser: slug(e.browser),
     embedded: e.embedded === true,
+    visibility: pickEnum('visibility'),
   };
 }
 

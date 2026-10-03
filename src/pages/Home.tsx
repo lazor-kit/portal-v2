@@ -10,14 +10,15 @@ import { TransactionReview } from "@/components/transaction-review"
 import { WalletConnection } from "@/components/wallet-connection"
 import { toHex } from "@/security/encoding"
 import { browserFamily, isFramed, requesterInput, watchParentMessages } from "@/security/environment"
+import { DecisionSurface, supportsVisibilityTracking } from "@/security/gesture"
 import type { ParentMessage } from "@/security/handshake"
 import { readPortalRequest } from "@/security/params"
-import { checkRedirect } from "@/security/redirect"
+import { checkRedirect, destinationLabel } from "@/security/redirect"
 import { appForOrigin } from "@/security/registry"
 import { evaluateRequest } from "@/security/request"
 import { resolveRequester } from "@/security/requester"
-import { routeFor, sendReply, type PortalResult, type ReplyWindow } from "@/security/reply"
-import { buildEvent, sendEvent, type Outcome } from "@/security/telemetry"
+import { refusalRoute, routeFor, sendReply, type ConnectedResult, type PortalResult, type ReplyRoute, type ReplyWindow } from "@/security/reply"
+import { buildEvent, sendEvent, type Outcome, type VisibilityTracking } from "@/security/telemetry"
 import { parseCluster, type ResolvedCluster } from "@/utils/cluster"
 import { ceremonyErrorText, signChallenge } from "@/utils/webauthn"
 
@@ -39,12 +40,11 @@ const replyWindow: ReplyWindow = {
   navigate: (url) => window.location.assign(url),
 }
 
-/** `https://host` or `scheme://` of a URL, for display; null when it is not one. */
-function destinationLabel(raw: string | null): string | null {
+/** A redirect destination as the screen shows it (see `destinationLabel`); null when it is not a URL. */
+function redirectLabel(raw: string | null): string | null {
   if (!raw) return null
   try {
-    const url = new URL(raw)
-    return url.protocol === "https:" || url.protocol === "http:" ? url.origin : `${url.protocol}//`
+    return destinationLabel(new URL(raw))
   } catch {
     return null
   }
@@ -53,6 +53,9 @@ function destinationLabel(raw: string | null): string | null {
 export default function Home() {
   const request = useMemo(() => readPortalRequest(window.location.search), [])
   const framed = useMemo(() => isFramed(), [])
+  // In a frame, whether the browser can report that the page is covered (see security/gesture).
+  const visibility: VisibilityTracking = useMemo(() => (framed ? (supportsVisibilityTracking() ? "tracked" : "untracked") : "top-level"), [framed])
+  const [surface, setSurface] = useState<HTMLElement | null>(null)
   const [messages, setMessages] = useState<readonly ParentMessage[]>([])
   const [settled, setSettled] = useState(false)
   const [phase, setPhase] = useState<Phase>("review")
@@ -97,9 +100,10 @@ export default function Home() {
         reason,
         cluster: now.network ? { cluster: now.network.cluster, source: now.network.source } : null,
         browser: browserFamily(),
+        visibility,
       }),
     )
-  }, [request.action])
+  }, [request.action, visibility])
   const reportRequest = useCallback(() => {
     if (reported.current) return
     reported.current = true
@@ -111,9 +115,9 @@ export default function Home() {
     return () => window.clearTimeout(timer)
   }, [reportRequest])
 
-  const finish = useCallback((result: PortalResult, outcome: Outcome, reason?: string) => {
+  const finish = useCallback((result: PortalResult, outcome: Outcome, reason?: string, route: ReplyRoute = latest.current.route) => {
     reportRequest()
-    const delivery = sendReply(latest.current.route, result, replyWindow)
+    const delivery = sendReply(route, result, replyWindow)
     report("result", delivery === "dropped" ? "undelivered" : outcome, reason)
     setPhase(delivery === "dropped" ? "undelivered" : "done")
   }, [report, reportRequest])
@@ -141,16 +145,18 @@ export default function Home() {
     }
   }, [finish])
 
-  const connected = useCallback((result: Extract<PortalResult, { type: "connected" }>) => {
+  const connected = useCallback((result: ConnectedResult) => {
     // The requester must still be the one that was shown.
     if (latest.current.evaluation.decision.outcome !== "show") return
     finish(result, "approved")
   }, [finish])
 
   const closeRefusal = useCallback((reason: string) => {
-    if (latest.current.route.channel !== "none") {
+    // Back to the requesting origin or a registered destination only.
+    const route = refusalRoute(latest.current.route, latest.current.redirect)
+    if (route.channel !== "none") {
       const { title, detail } = refusalText(reason)
-      finish({ type: "error", code: reason, message: `${title}: ${detail}` }, "refused", reason)
+      finish({ type: "error", code: reason, message: `${title}: ${detail}` }, "refused", reason, route)
       return
     }
     reportRequest()
@@ -162,7 +168,7 @@ export default function Home() {
   const app = requester.channel === "redirect" ? (redirect?.ok ? redirect.app : undefined) : appForOrigin(registry, requester.origin)
   const view: RequesterView = {
     channel: requester.channel,
-    label: requester.channel === "redirect" ? destinationLabel(request.redirectUrl) : requester.origin,
+    label: requester.channel === "redirect" ? redirectLabel(request.redirectUrl) : requester.origin,
     appName: app?.name,
     embeddedIn: requester.embeddedIn,
     openedFrom: requester.openedFrom,
@@ -232,16 +238,28 @@ export default function Home() {
         onApprove={approve}
         onCancel={cancel}
         onNetwork={setNetwork}
+        confirmRequired={visibility === "untracked"}
       />
     )
   }
 
+  // The page is the frame's height: the request scrolls inside it, and the
+  // requester bar and the buttons stay on screen. The surface (everything
+  // inside main's padding, which also keeps it clear of a frame's rounded
+  // corners) is what the approve buttons check is fully visible. In a frame
+  // too small to show the request at its minimum height, the buttons fall
+  // below the surface, so reaching them scrolls part of it off screen and
+  // Approve stays off.
   return (
-    <div className="h-full w-full bg-background text-foreground font-sans antialiased overflow-auto">
-      <main className="mx-auto flex w-full max-w-md flex-col gap-3 p-3">
-        <RequesterBar view={view} />
-        {body}
-      </main>
+    <div className="h-full w-full bg-background text-foreground font-sans antialiased overflow-auto" data-testid="page">
+      <DecisionSurface.Provider value={surface}>
+        <main className="mx-auto h-full w-full max-w-md p-3">
+          <div ref={setSurface} className="flex h-full min-h-0 flex-col gap-3" data-testid="surface">
+            <RequesterBar view={view} />
+            <div className="flex min-h-0 flex-1 flex-col">{body}</div>
+          </div>
+        </main>
+      </DecisionSurface.Provider>
     </div>
   )
 }

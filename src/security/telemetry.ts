@@ -14,6 +14,13 @@ import type { Channel, OriginEvidence, Requester } from './requester.ts';
 
 export type Outcome = 'shown' | 'refused' | 'approved' | 'rejected' | 'failed' | 'undelivered';
 
+/**
+ * Whether the page could check that it was visible when Approve was enabled:
+ * `tracked` (a frame, with IntersectionObserver v2), `untracked` (a frame
+ * without it), `top-level` (a popup or a page of its own).
+ */
+export type VisibilityTracking = 'tracked' | 'untracked' | 'top-level';
+
 export interface TelemetryEvent {
   readonly v: 1;
   readonly stage: PortalPolicy['stage'];
@@ -33,6 +40,7 @@ export interface TelemetryEvent {
   readonly clusterSource: string | null;
   readonly browser: string;
   readonly embedded: boolean;
+  readonly visibility: VisibilityTracking;
 }
 
 /** The requester as telemetry names it: an origin, or a redirect's scheme. */
@@ -56,6 +64,7 @@ export function buildEvent(input: {
   reason?: string | null;
   cluster?: { cluster: string; source: string } | null;
   browser: string;
+  visibility: VisibilityTracking;
 }): TelemetryEvent {
   const { decision } = input;
   const shown = decision.outcome === 'show';
@@ -77,6 +86,7 @@ export function buildEvent(input: {
     clusterSource: input.cluster?.source ?? null,
     browser: input.browser,
     embedded: input.requester.embeddedIn.length > 0,
+    visibility: input.visibility,
   };
 }
 
