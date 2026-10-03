@@ -174,6 +174,10 @@ test('a policy with an unknown value is refused', () => {
   assert.throws(() => parsePolicy({ ...good, gates: { ...good.gates, approval: 'maybe' } }), ConfigError);
   assert.throws(() => parsePolicy({ ...good, framing: { mode: 'off', allowLoopback: true } }), ConfigError);
   assert.throws(() => parsePolicy({ ...good, version: 2 }), ConfigError);
+  assert.throws(() => parsePolicy({ ...good, contentPolicy: 'off' }), ConfigError);
+  const withoutContentPolicy = { ...good };
+  delete withoutContentPolicy.contentPolicy;
+  assert.throws(() => parsePolicy(withoutContentPolicy), ConfigError);
 });
 
 // ─── Telemetry ──────────────────────────────────────────────────────────────

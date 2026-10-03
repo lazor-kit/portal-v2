@@ -16,5 +16,6 @@
   "framing": {
     "mode": "report",
     "allowLoopback": true
-  }
+  },
+  "contentPolicy": "report"
 }

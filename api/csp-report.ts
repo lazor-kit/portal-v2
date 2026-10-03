@@ -1,8 +1,14 @@
 /**
- * Content-Security-Policy reports for frame-ancestors (report-only and
- * enforced), logged as one JSON line each: which site framed the portal, and
- * whether the policy blocked or would have blocked it. Only origins are
- * logged, never a path or query.
+ * Content-Security-Policy reports, logged as one JSON line each: the
+ * directive, whether the policy blocked or would have blocked, and origins
+ * only (never a path or query).
+ *
+ * For frame-ancestors, browsers report the portal's own URL and never the
+ * site that framed it, so these lines count framings (by unregistered sites
+ * in transition) without naming anyone. The embedders to register come from
+ * /api/telemetry, whose events name the requesting origin. For the page's
+ * content policy, `blocked` is the origin of what was (or would have been)
+ * blocked.
  *
  *   POST /api/csp-report
  *     application/csp-report   { "csp-report": { ... } }       (report-uri)

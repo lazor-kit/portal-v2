@@ -54,6 +54,7 @@ export function parsePolicy(json: unknown, file = 'portal-policy.json'): PortalP
       mode: oneOf(file, 'framing.mode', framing.mode, ['report', 'enforce'] as const),
       allowLoopback: framing.allowLoopback,
     },
+    contentPolicy: oneOf(file, 'contentPolicy', json.contentPolicy, ['report', 'enforce'] as const),
   };
 }
 

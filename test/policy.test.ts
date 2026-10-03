@@ -37,6 +37,7 @@ const transition: PortalPolicy = {
   connectNonProofChallenge: 'ignore',
   redirects: redirectPolicy,
   framing: { mode: 'report', allowLoopback: true },
+  contentPolicy: 'report',
 };
 const enforce: PortalPolicy = {
   ...transition,
@@ -44,6 +45,7 @@ const enforce: PortalPolicy = {
   gates: { messageWithoutText: 'allow', transaction: 'registered', approval: 'registered', webview: 'deny' },
   redirects: { unregisteredSchemes: 'deny', unregisteredWeb: 'deny', deniedSchemes: [] },
   framing: { mode: 'enforce', allowLoopback: true },
+  contentPolicy: 'enforce',
 };
 
 const b64url = (b: Uint8Array) => Buffer.from(b).toString('base64url');

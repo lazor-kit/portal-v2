@@ -35,6 +35,11 @@ export interface PortalPolicy {
     readonly mode: 'report' | 'enforce';
     readonly allowLoopback: boolean;
   };
+  /**
+   * The page's own content policy (where scripts, styles and data may come
+   * from; see scripts/gen-headers.mjs): `report` (report-only) or `enforce`.
+   */
+  readonly contentPolicy: 'report' | 'enforce';
 }
 
 export type Warning =

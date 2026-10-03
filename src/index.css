@@ -90,7 +90,7 @@
     --radius-th_large: 14px;
 
     /* Typography */
-    --font-sans: "Roboto Flex", sans-serif;
+    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     --text-base: 15px;
     --text-base--line-height: 1.325;
 }
@@ -167,8 +167,8 @@
 }
 
 @theme inline {
-    --font-sans: "Roboto Flex", sans-serif;
-    --font-mono: "Geist Mono", "Geist Mono Fallback";
+    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
     --color-background: var(--background);
     --color-foreground: var(--foreground);
     --color-card: var(--card);
