@@ -9,10 +9,16 @@
  * Environment:
  *   RPC_MAINNET_URL  upstream for mainnet (secret; mainnet previews are
  *                    unavailable without it)
- *   RPC_DEVNET_URL   upstream for devnet (default: the public devnet RPC)
- *   PORTAL_ORIGIN    origins allowed to call this route, comma-separated
- *                    (e.g. https://portal.lazor.sh); the deployment's own
- *                    Vercel URLs are allowed too
+ *   RPC_DEVNET_URL   upstream for devnet (secret when keyed). Required on
+ *                    Vercel production and preview deployments: the public
+ *                    devnet RPC rate-limits the platform's shared addresses.
+ *                    Elsewhere (local development) it defaults to the public
+ *                    devnet RPC.
+ *   PORTAL_ORIGIN    further origins allowed to call this route,
+ *                    comma-separated (e.g. https://portal.lazor.sh)
+ *
+ * Callers: pages of the origin serving the request (same-origin), the
+ * deployment's own Vercel URLs, and PORTAL_ORIGIN.
  *
  * The file is self-contained (no local imports) so the platform can build it
  * as a function on its own.
@@ -35,6 +41,8 @@ export interface RpcEnv {
   readonly RPC_MAINNET_URL?: string;
   readonly RPC_DEVNET_URL?: string;
   readonly PORTAL_ORIGIN?: string;
+  /** `production`, `preview` or `development` on Vercel; unset elsewhere. */
+  readonly VERCEL_ENV?: string;
   readonly VERCEL_URL?: string;
   readonly VERCEL_BRANCH_URL?: string;
   readonly VERCEL_PROJECT_PRODUCTION_URL?: string;
@@ -145,16 +153,34 @@ function hostOrigin(host: string | undefined): string | null {
   return host ? `https://${host}` : null;
 }
 
-/** Origins allowed to call the route: PORTAL_ORIGIN, plus this deployment's own URLs. */
+/** Origins listed as callers: PORTAL_ORIGIN, plus this deployment's own Vercel URLs. */
 export function allowedOrigins(env: RpcEnv): Set<string> {
   const listed = (env.PORTAL_ORIGIN ?? '').split(',').map((o) => o.trim()).filter(Boolean);
   const own = [env.VERCEL_URL, env.VERCEL_BRANCH_URL, env.VERCEL_PROJECT_PRODUCTION_URL].map(hostOrigin);
   return new Set([...listed, ...own].filter((o): o is string => o !== null));
 }
 
+/**
+ * Whether a browser request from `origin` may call the route: a page of the
+ * origin serving `requestUrl` (any domain the deployment answers on, a
+ * staging domain included), or a listed origin.
+ */
+export function isAllowedCaller(origin: string | null, env: RpcEnv, requestUrl: string): boolean {
+  if (!origin || origin === 'null') return false;
+  if (origin === new URL(requestUrl).origin) return true;
+  return allowedOrigins(env).has(origin);
+}
+
+/** Whether this is a Vercel production or preview deployment. */
+function deployed(env: RpcEnv): boolean {
+  return env.VERCEL_ENV === 'production' || env.VERCEL_ENV === 'preview';
+}
+
 export function upstreamFor(env: RpcEnv, cluster: Cluster): string | null {
   if (cluster === 'mainnet') return env.RPC_MAINNET_URL?.trim() || null;
-  return env.RPC_DEVNET_URL?.trim() || DEFAULT_DEVNET_URL;
+  const configured = env.RPC_DEVNET_URL?.trim();
+  if (configured) return configured;
+  return deployed(env) ? null : DEFAULT_DEVNET_URL;
 }
 
 function rpcError(status: number, id: string | number | null, code: number, message: string): Response {
@@ -201,7 +227,7 @@ export async function handleRpc(request: Request, deps: RpcDeps): Promise<Respon
 
   if (request.method !== 'POST') return finish(rpcError(405, null, -32600, 'POST only'));
   const origin = request.headers.get('origin');
-  if (!origin || !allowedOrigins(deps.env).has(origin)) return finish(rpcError(403, null, -32600, 'origin not allowed'));
+  if (!isAllowedCaller(origin, deps.env, request.url)) return finish(rpcError(403, null, -32600, 'origin not allowed'));
   if (clusterParam !== 'mainnet' && clusterParam !== 'devnet') return finish(rpcError(400, null, -32600, 'cluster must be mainnet or devnet'));
 
   const declared = Number(request.headers.get('content-length') ?? '0');

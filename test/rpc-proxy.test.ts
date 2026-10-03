@@ -197,6 +197,32 @@ test('only the portal origin, or this deployment, may call it', async () => {
   assert.equal(calls.length, 1);
 });
 
+test('a page of the domain serving the route may call it (a staging domain, with PORTAL_ORIGIN set for production only)', async () => {
+  const calls: Call[] = [];
+  const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getLatestBlockhash', params: [] });
+  const at = (url: string, origin: string) => new Request(url, { method: 'POST', headers: { origin, 'content-type': 'application/json' }, body });
+  const staging = 'https://portal-staging.lazor.example';
+  const ok = await handleRpc(at(`${staging}/api/rpc?cluster=devnet`, staging), deps(upstream(calls), { PORTAL_ORIGIN: undefined }));
+  assert.equal(ok.status, 200);
+  for (const origin of ['https://elsewhere.example', 'http://portal-staging.lazor.example', 'https://portal-staging.lazor.example:8443', 'null']) {
+    assert.equal((await handleRpc(at(`${staging}/api/rpc?cluster=devnet`, origin), deps(upstream(calls), { PORTAL_ORIGIN: undefined }))).status, 403, origin);
+  }
+  assert.equal(calls.length, 1);
+});
+
+test('deployed on Vercel (production or preview), devnet needs RPC_DEVNET_URL; the public devnet RPC is for local use only', async () => {
+  const calls: Call[] = [];
+  const body = { jsonrpc: '2.0', id: 1, method: 'getLatestBlockhash', params: [] };
+  for (const VERCEL_ENV of ['production', 'preview']) {
+    const unset = await handleRpc(post(body), deps(upstream(calls), { RPC_DEVNET_URL: undefined, VERCEL_ENV }));
+    assert.equal(unset.status, 503, VERCEL_ENV);
+    assert.match(await unset.text(), /devnet RPC is not configured/);
+    assert.equal((await handleRpc(post(body), deps(upstream(calls), { VERCEL_ENV }))).status, 200);
+  }
+  assert.equal((await handleRpc(post(body), deps(upstream(calls), { RPC_DEVNET_URL: undefined, VERCEL_ENV: 'development' }))).status, 200);
+  assert.deepEqual(calls.map((c) => c.url), [DEVNET_UPSTREAM, DEVNET_UPSTREAM, 'https://api.devnet.solana.com']);
+});
+
 // ─── Never the upstream URL ─────────────────────────────────────────────────
 
 test('the upstream URL appears in no response and no log line, whatever fails', async () => {

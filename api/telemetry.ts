@@ -6,7 +6,8 @@
  *
  *   POST /api/telemetry   body: one event, at most 4 KiB
  *
- * Environment: PORTAL_ORIGIN (as for /api/rpc).
+ * Callers: pages of the origin serving the request, the deployment's own
+ * Vercel URLs, and PORTAL_ORIGIN (as for /api/rpc).
  * Self-contained, like every function in api/.
  */
 
@@ -45,6 +46,13 @@ export function allowedOrigins(env: TelemetryEnv): Set<string> {
   return new Set([...listed, ...own]);
 }
 
+/** A page of the origin serving `requestUrl`, or a listed origin. */
+export function isAllowedCaller(origin: string | null, env: TelemetryEnv, requestUrl: string): boolean {
+  if (!origin || origin === 'null') return false;
+  if (origin === new URL(requestUrl).origin) return true;
+  return allowedOrigins(env).has(origin);
+}
+
 /** The event with only known fields of known shapes; null when it is not an event. */
 export function cleanEvent(body: unknown): Record<string, unknown> | null {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return null;
@@ -79,7 +87,7 @@ const empty = (status: number) => new Response(null, { status, headers: { 'cache
 export async function handleTelemetry(request: Request, deps: TelemetryDeps): Promise<Response> {
   if (request.method !== 'POST') return empty(405);
   const origin = request.headers.get('origin');
-  if (!origin || !allowedOrigins(deps.env).has(origin)) return empty(403);
+  if (!isAllowedCaller(origin, deps.env, request.url)) return empty(403);
   if (Number(request.headers.get('content-length') ?? '0') > MAX_EVENT_BYTES) return empty(413);
   const text = await request.text();
   if (text.length > MAX_EVENT_BYTES) return empty(413);
