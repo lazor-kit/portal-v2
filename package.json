@@ -9,6 +9,8 @@
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
+    "test": "node --test 'test/*.test.ts'",
+    "typecheck:test": "tsc -p tsconfig.test.json",
     "preview": "vite preview"
   },
   "dependencies": {
