@@ -52,7 +52,11 @@ export type DecisionReason =
   | 'requester-conflict'
   | 'redirect-refused'
   | 'kind-denied'
-  | 'requires-registered-app';
+  | 'requires-registered-app'
+  /** No `action` the portal knows. */
+  | 'unknown-action'
+  /** A sign request that names no passkey (`credentialId`). */
+  | 'credential-missing';
 
 export type Decision =
   | {
@@ -64,7 +68,10 @@ export type Decision =
     }
   | { readonly outcome: 'refuse'; readonly reason: DecisionReason };
 
-const GATED: Partial<Record<ClassifiedChallenge['kind'], keyof PortalPolicy['gates']>> = {
+/** What is to be signed: a classified challenge, or a sign-in with no challenge from the request. */
+export type Subject = ClassifiedChallenge | { readonly kind: 'sign-in' };
+
+const GATED: Partial<Record<Subject['kind'], keyof PortalPolicy['gates']>> = {
   'message-without-text': 'messageWithoutText',
   transaction: 'transaction',
   approval: 'approval',
@@ -75,7 +82,7 @@ function passes(gate: Gate, registered: boolean): boolean {
 }
 
 export function decide(input: {
-  challenge: ClassifiedChallenge;
+  challenge: Subject;
   requester: Requester;
   /** Required on the redirect channel. */
   redirect?: RedirectDecision;

@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "stage": "transition",
+  "gates": {
+    "messageWithoutText": "allow",
+    "transaction": "allow",
+    "approval": "allow",
+    "webview": "deny"
+  },
+  "connectNonProofChallenge": "ignore",
+  "redirects": {
+    "unregisteredSchemes": "allow",
+    "unregisteredWeb": "same-origin",
+    "deniedSchemes": []
+  },
+  "framing": {
+    "mode": "report",
+    "allowLoopback": true
+  }
+}

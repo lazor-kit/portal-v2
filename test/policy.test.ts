@@ -15,7 +15,7 @@ const base: RequesterInput = {
   hasOpener: false,
   ancestorOrigins: null,
   referrer: '',
-  messageOrigin: null,
+  messageOrigins: [],
   redirectUrl: null,
   webview: false,
   selfOrigin: SELF,
@@ -59,7 +59,7 @@ test('iframe: the parent origin from ancestorOrigins, the SDK message, or the re
   assert.equal(viaAncestors.origin, 'https://app.acme.example');
   assert.equal(viaAncestors.evidence, 'ancestor-origins');
 
-  const redacted = resolveRequester({ ...base, framed: true, ancestorOrigins: ['null'], messageOrigin: 'https://app.acme.example' });
+  const redacted = resolveRequester({ ...base, framed: true, ancestorOrigins: ['null'], messageOrigins: ['https://app.acme.example'] });
   assert.equal(redacted.origin, 'https://app.acme.example');
   assert.equal(redacted.evidence, 'message');
 

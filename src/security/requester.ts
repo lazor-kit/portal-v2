@@ -24,8 +24,8 @@ export interface RequesterInput {
   readonly ancestorOrigins: readonly string[] | null;
   /** `document.referrer` */
   readonly referrer: string;
-  /** `event.origin` of a message whose `source` is the parent (framed) or the opener (popup). */
-  readonly messageOrigin: string | null;
+  /** `event.origin` of each message whose `source` is the parent (framed) or the opener (popup). */
+  readonly messageOrigins: readonly string[];
   /** The redirect destination from the URL, if any. */
   readonly redirectUrl: string | null;
   /** `!!window.ReactNativeWebView` */
@@ -79,12 +79,31 @@ function result(partial: Partial<Requester> & Pick<Requester, 'channel'>): Reque
   };
 }
 
+interface Source {
+  readonly evidence: OriginEvidence;
+  readonly origin: string | null;
+  /** Evidence that names a sender that is not a usable web origin (opaque, plain http). */
+  readonly unusable?: boolean;
+}
+
 /** Picks the strongest evidence, and flags a conflict when two sources disagree. */
-function pick(sources: { evidence: OriginEvidence; origin: string | null }[]): Pick<Requester, 'origin' | 'evidence' | 'conflict'> {
-  const named = sources.filter((s) => s.origin !== null);
+function pick(sources: Source[]): Pick<Requester, 'origin' | 'evidence' | 'conflict'> {
+  const named = sources.filter((s) => s.origin !== null || s.unusable);
   if (!named.length) return { origin: null, evidence: 'none', conflict: false };
-  const conflict = named.some((s) => s.origin !== named[0].origin);
-  return { origin: named[0].origin, evidence: named[0].evidence, conflict };
+  const first = named[0];
+  const conflict = named.some((s) => s.unusable || s.origin !== first.origin);
+  return { origin: first.unusable ? null : first.origin, evidence: first.evidence, conflict };
+}
+
+/**
+ * Every message counts: a sender that is not a web origin (an opaque "null"
+ * origin, say) cannot be answered, and makes the evidence a conflict.
+ */
+function fromMessages(origins: readonly string[]): Source[] {
+  return origins.map((raw) => {
+    const origin = webOrigin(raw);
+    return { evidence: 'message', origin, unusable: origin === null };
+  });
 }
 
 export function resolveRequester(input: RequesterInput): Requester {
@@ -105,7 +124,7 @@ export function resolveRequester(input: RequesterInput): Requester {
     const parent = input.ancestorOrigins ? webOrigin(ancestors[0]) : null;
     const chosen = pick([
       { evidence: 'ancestor-origins', origin: parent },
-      { evidence: 'message', origin: webOrigin(input.messageOrigin) },
+      ...fromMessages(input.messageOrigins),
       { evidence: 'referrer', origin: fromSelf ? null : referrer },
     ]);
     // An ancestor the browser redacted ("null") is still an ancestor.
@@ -115,7 +134,7 @@ export function resolveRequester(input: RequesterInput): Requester {
 
   if (input.hasOpener) {
     const chosen = pick([
-      { evidence: 'message', origin: webOrigin(input.messageOrigin) },
+      ...fromMessages(input.messageOrigins),
       { evidence: 'referrer', origin: fromSelf ? null : referrer },
     ]);
     return result({ channel: 'popup', ...chosen });
