@@ -1,7 +1,9 @@
 import { Info, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useState, useEffect } from "react"
-import { simulateTransaction, SimulationResult } from "@/utils/simulation"
+import { connectionFor, simulateTransaction, SimulationResult } from "@/utils/simulation"
+import { parseCluster, previewBlockhash, resolveCluster, type ResolvedCluster } from "@/utils/cluster"
+import { Buffer } from "buffer"
 import { PortalCommunicator, PortalParams } from "@/utils/portal-communicator"
 import { signMessage } from "@/utils/webauthn"
 
@@ -18,6 +20,7 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
   const [isSigning, setIsSigning] = useState(false)
   const [simulation, setSimulation] = useState<SimulationResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [network, setNetwork] = useState<ResolvedCluster | null>(null)
 
   useEffect(() => {
     const loadSimulation = async () => {
@@ -41,8 +44,14 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
       if (!transactionData) return
       setLoading(true)
       try {
-        const cluster = portalParams?.clusterSimulation === 'mainnet' ? 'mainnet' : 'devnet'
-        const result = await simulateTransaction(transactionData, cluster)
+        const blockhash = previewBlockhash(new Uint8Array(Buffer.from(transactionData, "base64")))
+        const resolved = await resolveCluster(
+          parseCluster(portalParams?.clusterSimulation ?? null),
+          blockhash,
+          async (cluster, hash) => (await connectionFor(cluster).isBlockhashValid(hash, { commitment: "processed" })).value,
+        )
+        setNetwork(resolved)
+        const result = await simulateTransaction(transactionData, resolved.cluster)
         setSimulation(result)
       } catch (error) {
         // Treat as simulation error (warning), not app error
@@ -138,6 +147,8 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
   // Fallback if simulation failed or hasn't loaded
   if (!simulation && !error) return null;
 
+  const simulationFailed = !!simulation?.error
+
   // Filter balance changes for UI (Show first and last if > 2)
   const displayChanges = simulation && simulation.balanceChanges.length > 2
     ? [simulation.balanceChanges[0], simulation.balanceChanges[simulation.balanceChanges.length - 1]]
@@ -180,12 +191,12 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
           )}
 
           {simulation?.error && (
-            <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-3 flex flex-col items-center justify-center text-center gap-1">
-              <div className="w-6 h-6 rounded-full bg-yellow-500/20 flex items-center justify-center text-yellow-500">
+            <div role="alert" className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 flex flex-col items-center justify-center text-center gap-1">
+              <div className="w-6 h-6 rounded-full bg-red-500/20 flex items-center justify-center text-red-500">
                 <Info className="w-4 h-4" />
               </div>
-              <p className="text-xs font-medium text-yellow-500">{simulation.error}</p>
-              <p className="text-[10px] text-yellow-500/80">Simulation failed. This transaction may fail if submitted.</p>
+              <p className="text-xs font-medium text-red-500">{simulation.error}</p>
+              <p className="text-[10px] text-red-500/80">This transaction is likely to fail. Approve only if you know why.</p>
             </div>
           )}
 
@@ -243,11 +254,21 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
           <div className="bg-muted/20 border border-border/40 rounded-xl p-3 space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs text-muted-foreground">Network</span>
-              <div className="flex items-center gap-1.5 bg-green-500/10 px-2 py-0.5 rounded-full border border-green-500/20">
-                <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
-                <span className="text-[10px] font-medium text-green-600">{simulation.network}</span>
+              <div className="flex items-center gap-1.5">
+                {network && !network.verified && (
+                  <span className="text-[10px] font-medium text-yellow-500">Unverified</span>
+                )}
+                <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full border ${network?.verified ? "bg-green-500/10 border-green-500/20" : "bg-yellow-500/10 border-yellow-500/20"}`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${network?.verified ? "bg-green-500" : "bg-yellow-500"}`}></span>
+                  <span className={`text-[10px] font-medium ${network?.verified ? "text-green-600" : "text-yellow-500"}`}>{simulation.network}</span>
+                </div>
               </div>
             </div>
+            {network?.mismatch && (
+              <p className="text-[10px] text-yellow-500 leading-tight">
+                The app asked for {network.cluster === "mainnet" ? "devnet" : "mainnet"}, but this transaction is for {network.cluster === "mainnet" ? "mainnet" : "devnet"}.
+              </p>
+            )}
 
             <div className="flex items-center justify-between">
               <span className="text-xs text-muted-foreground">Network Fee</span>
@@ -263,25 +284,25 @@ export function TransactionReview({ onBack, transactionData, origin = "Unknown A
 
         <div className="grid grid-cols-2 gap-2 pt-1">
           <Button
-            variant="outline"
+            variant={simulationFailed ? "default" : "outline"}
             onClick={handleReject}
             disabled={isSigning}
-            className="w-full bg-muted/50 hover:bg-muted text-foreground font-semibold py-2 rounded-lg h-10 text-sm border-border/50"
+            className={`w-full font-semibold py-2 rounded-lg h-10 text-sm ${simulationFailed ? "" : "bg-muted/50 hover:bg-muted text-foreground border-border/50"}`}
           >
             Cancel
           </Button>
           <Button
             onClick={handleApprove}
-            variant="default"
+            variant={simulationFailed ? "outline" : "default"}
             disabled={isSigning || !!error}
-            className="w-full font-semibold py-2 rounded-lg h-10 text-sm"
+            className={`w-full font-semibold py-2 rounded-lg h-10 text-sm ${simulationFailed ? "bg-muted/50 hover:bg-muted text-foreground border-border/50" : ""}`}
           >
             {isSigning ? (
               <>
                 <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
                 Signing...
               </>
-            ) : "Approve"}
+            ) : simulationFailed ? "Approve anyway" : "Approve"}
           </Button>
         </div>
       </div>
