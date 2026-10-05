@@ -1,0 +1,26 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Content-Security-Policy",
+          "value": "frame-ancestors https: http://localhost:* http://127.0.0.1:*"
+        },
+        {
+          "key": "Content-Security-Policy-Report-Only",
+          "value": "frame-ancestors http://localhost:* http://127.0.0.1:* https://localhost:*; default-src 'self'; script-src 'self' 'sha256-S+HJw+8Rwyn8GWo4TJ37BgZtx8xMvQaRDX8r4nD96Hw='; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.coingecko.com; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; report-uri /api/csp-report; report-to csp"
+        },
+        {
+          "key": "Reporting-Endpoints",
+          "value": "csp=\"/api/csp-report\""
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        }
+      ]
+    }
+  ]
+}

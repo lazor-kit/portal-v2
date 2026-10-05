@@ -3,14 +3,34 @@
 
 <head>
   <meta charset="UTF-8" />
+  <script>
+    // Who embedded or opened the portal: until the app loads and takes over,
+    // keep the origin, type and hello id of each message from the parent or
+    // opener (never its data).
+    (function () {
+      var seen = [];
+      window.__lkEarlyMessages = seen;
+      function onMessage(e) {
+        try {
+          if (e.source == null || seen.length >= 32) return;
+          var framed = window.parent !== window;
+          var from = framed && e.source === window.parent ? 'parent'
+            : !framed && window.opener && window.opener !== window && e.source === window.opener ? 'opener' : null;
+          if (!from) return;
+          var d = e.data && typeof e.data === 'object' ? e.data : {};
+          var type = typeof d.type === 'string' && d.type.length <= 64 ? d.type : null;
+          var rid = type === 'lazorkit:hello' && d.v === 1 && typeof d.rid === 'string' && d.rid.length <= 64 ? d.rid : null;
+          seen.push({ origin: String(e.origin), from: from, type: type, rid: rid });
+        } catch (_) { /* keep recording */ }
+      }
+      window.addEventListener('message', onMessage);
+      window.__lkEarlyStop = function () { window.removeEventListener('message', onMessage); };
+    })();
+  </script>
   <link rel="icon" href="data:," />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="A secure passkey authentication portal" />
   <title>Passkey Portal</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wght@8..144,100..1000&display=swap"
-    rel="stylesheet" />
 </head>
 
 <body>

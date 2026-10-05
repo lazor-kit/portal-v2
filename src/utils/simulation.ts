@@ -24,12 +24,22 @@ export interface SimulationResult {
     autoConfirm: string;
     chainId: string;
     error?: string;
+    /** No simulation result at all (the RPC route was unreachable or not configured), as opposed to a failing transaction. */
+    unavailable?: boolean;
 }
 
 
-// Default RPC endpoints
-const RPC_ENDPOINT_DEVNET = "https://api.devnet.solana.com";
-const RPC_ENDPOINT_MAINNET = "https://mainnet.helius-rpc.com/?api-key=47712b7a-ea63-49b8-9685-dff77d9eb55a";
+export type Cluster = "mainnet" | "devnet";
+
+/** The portal's own RPC route for `cluster`; it holds the upstream URL and key. */
+export function rpcEndpoint(cluster: Cluster): string {
+    return new URL(`/api/rpc?cluster=${cluster}`, window.location.origin).href;
+}
+
+export function connectionFor(cluster: Cluster): Connection {
+    return new Connection(rpcEndpoint(cluster), { commitment: "confirmed", disableRetryOnRateLimit: true });
+}
+
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 
@@ -89,9 +99,8 @@ async function getSolPrice(): Promise<number> {
 /**
  * Simulates a transaction to determine balance changes and metadata.
  */
-export async function simulateTransaction(base64Tx: string, cluster: string = 'devnet'): Promise<SimulationResult> {
-    const endpoint = cluster === 'mainnet' ? RPC_ENDPOINT_MAINNET : RPC_ENDPOINT_DEVNET;
-    const connection = new Connection(endpoint, "confirmed");
+export async function simulateTransaction(base64Tx: string, cluster: Cluster): Promise<SimulationResult> {
+    const connection = connectionFor(cluster);
     let networkFee = "Unknown";
     let isSuccess = false;
     const balanceChanges: BalanceChange[] = [];
@@ -549,7 +558,7 @@ export async function simulateTransaction(base64Tx: string, cluster: string = 'd
         }
 
     } catch (error) {
-        console.error("Simulation failed unexpectedly:", error);
+        console.warn("Simulation unavailable:", error instanceof Error ? error.message : error);
     }
 
     let errorMsg: string | undefined;
@@ -573,7 +582,7 @@ export async function simulateTransaction(base64Tx: string, cluster: string = 'd
         } else if (simulated?.err) {
             errorMsg = `Transaction simulation failed: ${String(simulated.err)}`;
         } else {
-            errorMsg = "Transaction simulation failed";
+            errorMsg = simulated ? "Transaction simulation failed" : "This transaction could not be simulated.";
         }
         if (errorMsg) {
             errorMsg = errorMsg.replace(/"/g, '');
@@ -605,6 +614,7 @@ export async function simulateTransaction(base64Tx: string, cluster: string = 'd
         networkFeeUSD,
         autoConfirm: "Off",
         chainId: cluster === 'mainnet' ? "mainnet-beta" : "devnet",
-        error: errorMsg
+        error: errorMsg,
+        unavailable: !isSuccess && !simulated,
     };
 }

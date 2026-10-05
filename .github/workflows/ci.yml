@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck:test
+      - run: pnpm lint:checked
+      - run: pnpm test
+      - name: Released SDKs read the portal's replies
+        run: |
+          pnpm --dir compat install --frozen-lockfile
+          pnpm --dir compat test
+      - run: pnpm headers:check
+      - run: pnpm build
+      - name: No RPC key material in the bundle
+        # File names only: a matching line could hold the key itself.
+        run: |
+          if grep -rliE 'api-key=|helius' dist/; then
+            echo "::error::RPC key material found in the files above"
+            exit 1
+          fi
+      - name: Secret scan of the tree and the bundle
+        run: |
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 dir /repo --config /repo/.gitleaks.toml --no-banner --redact --exit-code 1 \
+            --ignore-gitleaks-allow

@@ -3,12 +3,23 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "packageManager": "pnpm@10.26.0",
+  "engines": {
+    "node": "24.x",
+    "pnpm": "10.26.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
+    "lint:checked": "eslint src/security src/pages src/components/*.tsx src/config.ts api test e2e",
+    "test": "node --test 'test/*.test.ts'",
+    "typecheck:test": "tsc -p tsconfig.test.json",
+    "headers": "node scripts/gen-headers.mjs",
+    "headers:check": "node scripts/gen-headers.mjs --check",
+    "e2e": "node e2e/run.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
