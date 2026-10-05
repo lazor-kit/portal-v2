@@ -33,14 +33,133 @@ const LOOPBACK = ['http://localhost:*', 'http://127.0.0.1:*', 'https://localhost
 /** Where the page fetches data: its own /api routes, and the SOL price for the fee in USD. */
 export const CONNECT_SOURCES = ["'self'", 'https://api.coingecko.com'];
 
+const SPACE = new Set(['\t', '\n', '\f', '\r', ' ']);
+/** Elements whose content is text, not markup (RCDATA and RAWTEXT; noscript as a page with scripting reads it). */
+const TEXT_ONLY = new Set(['title', 'textarea', 'style', 'xmp', 'iframe', 'noembed', 'noframes', 'noscript']);
+
+/**
+ * The text of each inline script of an HTML page: what the browser hashes
+ * for `script-src`.
+ *
+ * Read by the HTML tokenizer's own rules for everything that decides where a
+ * script starts and ends: tag and attribute names in any case; attribute
+ * values in any quoting (a `>` inside quotes does not end a tag); an end tag
+ * as `</script` then whitespace, `/` or `>`, then anything up to `>`;
+ * comments, doctypes and other declarations; the text-only elements (title,
+ * textarea, style, …), whose `<script>` is text; and the input stream's
+ * newline normalisation (CR LF and CR become LF). A script with a `src`
+ * attribute, in any case or quoting, is external, and its body is not run.
+ *
+ * Where the tokenizer would need state this reader does not keep, it throws
+ * rather than guess: a script body containing `<!--` (the escaped states,
+ * which can move where the script ends), a script inside SVG or MathML, a
+ * comment that closes early (`<!-->`, `--!>`), a NUL, or a tag, attribute
+ * value, comment or element left open.
+ */
+export function inlineScripts(html) {
+  const text = html.replace(/\r\n?/g, '\n');
+  // ASCII-only lower case, so offsets in `lower` are offsets in `text`.
+  const lower = text.replace(/[A-Z]/g, (c) => c.toLowerCase());
+  const fail = (what, at) => {
+    throw new Error(`HTML not read for the content policy: ${what} at offset ${at}.`);
+  };
+  if (text.includes('\0')) fail('a NUL character', text.indexOf('\0'));
+
+  /** The tag whose name starts at `at`: lower-case name, attribute names, whether it ends `/>`, and the offset after it. */
+  const readTag = (at) => {
+    let i = at;
+    while (i < text.length && !SPACE.has(text[i]) && text[i] !== '/' && text[i] !== '>') i++;
+    const name = lower.slice(at, i);
+    const attributes = new Set();
+    for (;;) {
+      while (SPACE.has(text[i])) i++;
+      if (i >= text.length) fail(`an unterminated <${name}> tag`, at);
+      if (text[i] === '>') return { name, attributes, selfClosing: false, end: i + 1 };
+      if (text[i] === '/') {
+        if (text[i + 1] === '>') return { name, attributes, selfClosing: true, end: i + 2 };
+        i++;
+        continue;
+      }
+      // An attribute: its name (whose first character may be `=`), then an optional value.
+      const nameAt = i++;
+      while (i < text.length && !SPACE.has(text[i]) && text[i] !== '/' && text[i] !== '>' && text[i] !== '=') i++;
+      attributes.add(lower.slice(nameAt, i));
+      while (SPACE.has(text[i])) i++;
+      if (text[i] !== '=') continue;
+      i++;
+      while (SPACE.has(text[i])) i++;
+      if (text[i] === '"' || text[i] === "'") {
+        const close = text.indexOf(text[i], i + 1);
+        if (close === -1) fail(`an unterminated attribute value in <${name}>`, i);
+        i = close + 1;
+      } else {
+        while (i < text.length && !SPACE.has(text[i]) && text[i] !== '>') i++;
+      }
+    }
+  };
+
+  /** The end tag that closes a script or text-only element `name` whose content starts at `from`. */
+  const closeOf = (name, from) => {
+    for (let i = lower.indexOf(`</${name}`, from); i !== -1; i = lower.indexOf(`</${name}`, i + 1)) {
+      const next = text[i + 2 + name.length];
+      if (next === undefined || SPACE.has(next) || next === '/' || next === '>') return { start: i, end: readTag(i + 2).end };
+    }
+    return fail(`an unterminated <${name}> element`, from);
+  };
+
+  const scripts = [];
+  let foreign = 0;
+  for (let i = text.indexOf('<'); i !== -1; i = text.indexOf('<', i)) {
+    if (lower.startsWith('<!--', i)) {
+      const end = text.indexOf('-->', i + 4);
+      if (end === -1 || /^-?>/.test(text.slice(i + 4, i + 6)) || text.slice(i + 4, end).includes('--!>')) {
+        fail('an unterminated comment, or one that closes early', i);
+      }
+      i = end + 3;
+      continue;
+    }
+    const closing = text[i + 1] === '/';
+    const nameAt = i + (closing ? 2 : 1);
+    const startsName = /[a-z]/.test(lower[nameAt] ?? '');
+    if (text[i + 1] === '!' || text[i + 1] === '?' || (closing && !startsName && nameAt < text.length)) {
+      // A doctype or another declaration, up to the first `>` (as the tokenizer reads it, even inside quotes).
+      const end = text.indexOf('>', i + 2);
+      if (end === -1) fail('an unterminated declaration', i);
+      i = end + 1;
+      continue;
+    }
+    if (!startsName) {
+      i += 1; // a `<` in text
+      continue;
+    }
+    const tag = readTag(nameAt);
+    if (tag.name === 'svg' || tag.name === 'math') {
+      if (closing) foreign = Math.max(0, foreign - 1);
+      else if (!tag.selfClosing) foreign += 1;
+      i = tag.end;
+    } else if (closing) {
+      i = tag.end;
+    } else if (tag.name === 'script') {
+      if (foreign) fail('a script inside SVG or MathML', i);
+      const close = closeOf('script', tag.end);
+      const body = text.slice(tag.end, close.start);
+      if (body.includes('<!--')) fail('a script containing "<!--"', tag.end);
+      if (!tag.attributes.has('src')) scripts.push(body);
+      i = close.end;
+    } else if (tag.name === 'plaintext' && !foreign) {
+      break; // the rest of the page is text
+    } else if (TEXT_ONLY.has(tag.name) && !foreign) {
+      i = closeOf(tag.name, tag.end).end;
+    } else {
+      i = tag.end;
+    }
+  }
+  return scripts;
+}
+
 /** The CSP sources (`'sha256-…'`) for the inline scripts of an HTML page. */
 export function inlineScriptHashes(html) {
-  const hashes = [];
-  for (const match of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
-    if (/\bsrc\s*=/i.test(match[1])) continue;
-    hashes.push(`'sha256-${createHash('sha256').update(match[2], 'utf8').digest('base64')}'`);
-  }
-  return hashes;
+  return inlineScripts(html).map((script) => `'sha256-${createHash('sha256').update(script, 'utf8').digest('base64')}'`);
 }
 
 /** The frame-ancestors source list for registered origins (and loopback when the policy allows it). */

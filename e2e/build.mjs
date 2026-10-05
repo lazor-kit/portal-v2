@@ -14,6 +14,9 @@ export const ROOT = fileURLToPath(new URL('..', import.meta.url));
 export const OUT = join(ROOT, 'e2e/.out');
 
 export const DAPP = 'http://localhost:5174';
+/** The portal builds the run serves: the committed policy (transition), and every gate at enforce. */
+export const PORTAL_T = 'http://localhost:4173';
+export const PORTAL_E = 'http://localhost:4174';
 export const REGISTRY = {
   version: 1,
   apps: [{ id: 'e2e-dapp', name: 'E2E dApp', origins: [DAPP], redirects: [`${DAPP}/callback`, 'e2eapp://'] }],
@@ -73,7 +76,8 @@ export async function buildAll() {
     logLevel: 'warn',
     build: { outDir: join(OUT, 'dapp'), emptyOutDir: true, minify: false },
     resolve: { alias: { '@lazorkit/wallet': sdk.entry } },
-    define: { global: 'globalThis' },
+    // The only portals the dApp will frame (`?portal=` picks one of them).
+    define: { global: 'globalThis', __E2E_PORTALS__: JSON.stringify([PORTAL_T, PORTAL_E]) },
   });
   return { transition, enforced, dapp: join(OUT, 'dapp'), sdkVersion: sdk.version };
 }

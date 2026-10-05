@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { contentDirectives, headersFor, inlineScriptHashes, render } from '../scripts/gen-headers.mjs';
+import { contentDirectives, headersFor, inlineScriptHashes, inlineScripts, render } from '../scripts/gen-headers.mjs';
 import { parsePolicy, parseRegistry } from '../src/security/config.ts';
 import type { PortalPolicy } from '../src/security/policy.ts';
 import { handleCspReport } from '../api/csp-report.ts';
@@ -58,14 +58,60 @@ test('content policy: own origin only, the inline recorder by hash, no plugins, 
     "base-uri 'none'",
     "form-action 'none'",
   ]);
-  // The one inline script, hashed as the browser hashes it.
-  const inline = /<script>([\s\S]*?)<\/script>/.exec(indexHtml)![1];
+  // The one inline script, hashed as the browser hashes it. index.html opens it
+  // with exactly `<script>`, once, and nothing in it reads as an end tag earlier.
+  const open = indexHtml.indexOf('<script>');
+  assert.equal(indexHtml.indexOf('<script>', open + 1), -1);
+  const inline = indexHtml.slice(open + '<script>'.length, indexHtml.indexOf('</script>', open));
+  assert.deepEqual(inlineScripts(indexHtml), [inline]);
   assert.deepEqual(hashes, [`'sha256-${createHash('sha256').update(inline, 'utf8').digest('base64')}'`]);
   assert.deepEqual(inlineScriptHashes('<script type="module" src="/x.js"></script><script>a()</script>'), [`'sha256-${createHash('sha256').update('a()').digest('base64')}'`]);
   // Nothing in the page comes from another origin.
   for (const match of indexHtml.matchAll(/(?:src|href)="([^"]+)"/g)) {
     assert.ok(!/^(https?:)?\/\//.test(match[1]), `third-party resource ${match[1]}`);
   }
+});
+
+test('inline scripts are read as the browser reads them, in any case, spacing or quoting', () => {
+  const cases: [string, string[]][] = [
+    ['<SCRIPT>a()</SCRIPT>', ['a()']],
+    ['<script >a()</script >', ['a()']],
+    ['<ScRiPt\n\ttype="text/javascript">a()</sCrIpT\t\n>', ['a()']],
+    // An end tag ends the script with attributes or a slash too; `</scripts` is not one.
+    ['<script>a()</script foo="x>y">', ['a()']],
+    ['<script>a()</script/>', ['a()']],
+    ['<script>if (a </scripts) b()</script>', ['if (a </scripts) b()']],
+    // A `>` or `</script>` inside a quoted attribute value is not the end of the tag.
+    ['<script data-x="a > b" async>a()</script>', ['a()']],
+    ["<script data-x='</script>'>a()</script>", ['a()']],
+    // `src` in any case or quoting makes a script external: its body does not run.
+    ['<script type="module" SRC="/x.js"></script><script>b()</script>', ['b()']],
+    ['<script src=/x.js></script><script data-src="y">c()</script>', ['c()']],
+    // `<script>` in a comment, a text-only element or an attribute value is text.
+    ['<!-- <script>no()</script> --><script>a()</script>', ['a()']],
+    ['<title><script>no()</script></TITLE ><script>a()</script>', ['a()']],
+    ['<textarea><script>no()</script></textarea><style>/* <script> */</style>', []],
+    ['<meta content="<script>no()</script>"><p title=<script>>x</p>', []],
+    ['<!doctype html><p>1 < 2 </ 3 <3</p><svg/><script>a()</script>', ['a()']],
+    // The input stream turns CR LF and CR into LF before the browser hashes anything.
+    ['<script>a()\r\nb()\rc()</script>', ['a()\nb()\nc()']],
+  ];
+  for (const [html, expected] of cases) assert.deepEqual(inlineScripts(html), expected, html);
+});
+
+test('inline scripts: markup the reader does not follow fails loudly instead of guessing', () => {
+  for (const html of [
+    '<script><!-- <script>x()</script> --></script>', // the escaped states move where the script ends
+    '<script>a()', // never closed
+    '<script>a()</script', // end tag never closed
+    '<script data-x="a>a()</script>', // attribute value never closed
+    '<!-- open',
+    '<!--> <script>a()</script>', // a comment that closes at once
+    '<!-- a --!> <script>a()</script> -->',
+    '<svg><script>a()</script></svg>',
+    '<title>open',
+    'a\0b',
+  ]) assert.throws(() => inlineScripts(html), /HTML not read for the content policy/, html);
 });
 
 test('never X-Frame-Options or a same-origin opener policy', () => {

@@ -72,8 +72,10 @@ export async function startPortal({ port, dist, vercelJson, apiDir, env, log, de
       if (delay) await new Promise((r) => setTimeout(r, delay));
       serveFile(res, dist, url.pathname, headers);
     } catch (error) {
+      // The cause goes to the run's output, never to the page.
+      console.error(`portal :${port} ${req.method}:`, error);
       res.statusCode = 500;
-      res.end(String(error));
+      res.end('internal error');
     }
   });
   return listen(server, port, 'localhost');
@@ -81,9 +83,10 @@ export async function startPortal({ port, dist, vercelJson, apiDir, env, log, de
 
 /**
  * The test dApp on `host:port`: its build, a page served with any Referrer-Policy (`?referrer=`),
- * a callback page that shows its query, and a bouncer page that navigates on to `?to=`.
+ * a callback page that shows its query, and a bouncer page that navigates on to `?to=` when
+ * that is a page of one of `portals` (origins).
  */
-export async function startDapp({ port, host, dist }) {
+export async function startDapp({ port, host, dist, portals }) {
   const server = createServer((req, res) => {
     const url = new URL(req.url, `http://${host}:${port}`);
     if (url.pathname === '/callback') {
@@ -92,7 +95,9 @@ export async function startDapp({ port, host, dist }) {
     }
     if (url.pathname === '/bounce') {
       res.setHeader('content-type', 'text/html; charset=utf-8');
-      return res.end(`<!doctype html><script>location.replace(new URLSearchParams(location.search).get('to'))</script>`);
+      const bounce = `const to = new URL(new URLSearchParams(location.search).get('to') ?? '', location.href);
+if (${JSON.stringify(portals)}.includes(to.origin)) location.replace(to.href);`;
+      return res.end(`<!doctype html><script>${bounce}</script>`);
     }
     const referrer = url.searchParams.get('referrer');
     serveFile(res, dist, url.pathname, referrer ? [{ key: 'Referrer-Policy', value: referrer }] : []);

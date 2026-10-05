@@ -19,14 +19,13 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { Keypair, SystemProgram, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
-import { buildAll, DAPP, OUT } from './build.mjs';
+import { inlineScriptHashes } from '../scripts/gen-headers.mjs';
+import { buildAll, DAPP, OUT, PORTAL_E, PORTAL_T } from './build.mjs';
 import { startDapp, startPortal, startRpc } from './serve.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE ?? 'playwright');
 
-const PORTAL_T = 'http://localhost:4173';
-const PORTAL_E = 'http://localhost:4174';
 const DAPP_B = 'http://127.0.0.1:5175';
 const FAKE_KEY = 'E2E-FAKE-KEY-0000';
 const SAFARI_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15';
@@ -60,8 +59,8 @@ const servers = [
   await startRpc({ port: 8899, calls: rpcCalls }),
   await startPortal({ port: 4173, ...built.transition, apiDir: join(OUT, '../../api'), env: env(PORTAL_T), log: (l) => logs.push(l), delayAssetsMs: () => delayAssets }),
   await startPortal({ port: 4174, ...built.enforced, apiDir: join(OUT, '../../api'), env: env(PORTAL_E), log: (l) => logs.push(l) }),
-  await startDapp({ port: 5174, host: 'localhost', dist: built.dapp }),
-  await startDapp({ port: 5175, host: '127.0.0.1', dist: built.dapp }),
+  await startDapp({ port: 5174, host: 'localhost', dist: built.dapp, portals: [PORTAL_T, PORTAL_E] }),
+  await startDapp({ port: 5175, host: '127.0.0.1', dist: built.dapp, portals: [PORTAL_T, PORTAL_E] }),
 ];
 
 // ─── Browser ────────────────────────────────────────────────────────────────
@@ -743,10 +742,21 @@ await scenario('headers: frame-ancestors from the registry and the content polic
   check(tEnforced?.startsWith('frame-ancestors https:') && !tEnforced.includes('default-src'), 'transition enforces https ancestors only');
   check(tReport?.includes(`frame-ancestors ${DAPP}`) && tReport.includes("default-src 'self'") && tReport.includes("object-src 'none'"), 'transition reports other embedders and content');
   check(eEnforced?.startsWith(`frame-ancestors ${DAPP} `) && eEnforced.includes("default-src 'self'") && !e.headers.has('content-security-policy-report-only'), 'enforce lists registered origins and enforces content');
-  // The built page's inline script is the one the policy allows by hash.
-  const html = readFileSync(join(built.enforced.dist, 'index.html'), 'utf8');
-  const inline = /<script>([\s\S]*?)<\/script>/.exec(html)[1];
-  check(eEnforced.includes(`'sha256-${createHash('sha256').update(inline, 'utf8').digest('base64')}'`), 'inline recorder hash');
+  // The served page's inline scripts, as Chromium's own parser reads them, are the ones the policy allows by hash.
+  const html = await e.text();
+  const parser = await browser.newContext();
+  try {
+    const page = await parser.newPage();
+    const inline = await page.evaluate(
+      (source) => [...new DOMParser().parseFromString(source, 'text/html').scripts].filter((s) => !s.hasAttribute('src')).map((s) => s.text),
+      html,
+    );
+    const allowed = inline.map((text) => `'sha256-${createHash('sha256').update(text, 'utf8').digest('base64')}'`);
+    check(inline.length === 1 && allowed.every((source) => eEnforced.includes(source)), 'inline recorder hash');
+    check(JSON.stringify(inlineScriptHashes(html)) === JSON.stringify(allowed), 'gen-headers reads the inline scripts as Chromium does');
+  } finally {
+    await parser.close();
+  }
   check(!/fonts\.googleapis|fonts\.gstatic/.test(html), 'no third-party stylesheet');
   check(!t.headers.has('x-frame-options') && !t.headers.has('cross-origin-opener-policy'), 'no XFO, no COOP');
   return { transition: tEnforced, enforce: eEnforced.slice(0, 120) };

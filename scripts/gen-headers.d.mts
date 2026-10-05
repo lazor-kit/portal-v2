@@ -5,6 +5,7 @@ type Header = { key: string; value: string };
 
 export declare const REPORT_PATH: string;
 export declare const CONNECT_SOURCES: readonly string[];
+export declare function inlineScripts(html: string): string[];
 export declare function inlineScriptHashes(html: string): string[];
 export declare function registeredAncestors(registry: Registry, policy: PortalPolicy): string;
 export declare function contentDirectives(scriptHashes: readonly string[]): string[];

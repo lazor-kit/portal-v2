@@ -2,8 +2,22 @@
 // and through hand-made requests (raw) the SDK would never send.
 import { DialogManager, signedMessageChallenge } from '@lazorkit/wallet';
 
-const params = new URLSearchParams(location.search);
-const portalUrl = params.get('portal') ?? 'http://localhost:4173';
+/** The run's own portal builds (e2e/build.mjs): the first is the default. */
+declare const __E2E_PORTALS__: readonly string[];
+
+/** The portal to drive: `?portal=` names one of the run's portals, and nothing else is ever framed. */
+function chosenPortal(): string {
+  const requested = new URLSearchParams(location.search).get('portal');
+  if (requested === null) return __E2E_PORTALS__[0];
+  const portal = __E2E_PORTALS__.find((known) => known === requested);
+  if (portal === undefined) {
+    document.getElementById('status')!.textContent = 'unknown portal';
+    throw new Error('?portal= is not one of the e2e portals');
+  }
+  return portal;
+}
+
+const portalUrl = chosenPortal();
 
 type Outcome = { ok: true; value: unknown } | { ok: false; name: string; message: string };
 
