@@ -1,70 +1,131 @@
 import { useState } from "react"
-import { AlertTriangle, KeyRound } from "lucide-react"
 import { ApproveButtons } from "@/components/approve-buttons"
+import { Actions, Body, CautionRow, DangerBlock, Details, Hero, PasskeyCaption, PlainButton, Sentence, type Row } from "@/components/sheet"
+import { buttonClass } from "@/lib/ui"
 import { groupHex } from "@/security/display"
+import { ACK_ARM_DELAY_MS } from "@/security/gesture"
 
 type ApprovalReviewProps = {
-  requesterLabel: string
+  /** How sentences name the requester. */
+  name: string
+  /** Where the request came from (nested frames and the like), for Details. */
+  context: readonly Row[]
   framed: boolean
-  busy: boolean
-  error: string | null
+  explain: boolean
   onApprove: () => void
   onCancel: () => void
-} & ({ kind: "approval"; fingerprint: string } | { kind: "ownership" })
+} & ({ kind: "approval"; fingerprint: string; verified: boolean } | { kind: "ownership" })
+
+export const LEGACY_TITLE = "Approve a change LazorKit can't show"
+const LEGACY_RISK = "It could do anything, up to full control of your account."
+const ACK = "I understand this could give away control of my account."
 
 /**
- * A wallet change the app prepared (session, authority and similar), shown
- * by fingerprint with an explicit confirmation; or a proof that the user
- * holds this passkey, which approves nothing.
+ * A wallet change the app prepared, which LazorKit can't read yet (session,
+ * key and similar requests from current SDKs): Cancel is the recommended
+ * button. From a verified site it is a caution; from any other requester a
+ * danger, and approving takes a confirmation step with a box to tick.
+ *
+ * Or a proof that the user holds this passkey, which approves nothing.
  */
 export function ApprovalReview(props: ApprovalReviewProps) {
+  const [ack, setAck] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
 
-  return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3" data-testid="approval-review" data-kind={props.kind}>
-      <div className="min-h-[7.5rem] flex-1 space-y-3 overflow-y-auto" data-testid="review-content">
-        {props.kind === "ownership" ? (
-          <>
-            <h1 className="text-base font-bold text-foreground">Confirm it's you</h1>
-            <div className="rounded-lg border border-border/60 bg-muted/40 p-3 flex items-start gap-2">
-              <KeyRound className="w-4 h-4 text-muted-foreground shrink-0 mt-0.5" />
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                {props.requesterLabel} asks you to confirm that you hold this passkey. Nothing is approved or paid.
-              </p>
-            </div>
-          </>
-        ) : (
-          <>
-            <h1 className="text-base font-bold text-foreground">Approve wallet change</h1>
-            <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-2.5 flex items-start gap-2" role="alert">
-              <AlertTriangle className="w-3.5 h-3.5 text-yellow-500 shrink-0 mt-0.5" />
-              <p className="text-[11px] text-yellow-500 leading-tight">
-                {props.requesterLabel} asks you to approve a wallet change it started. Details aren't shown for this kind of request.
-                Approve only if you just asked this site to make a change.
-              </p>
-            </div>
-            <div className="rounded-lg border border-border/60 bg-muted/40 p-3">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Fingerprint</p>
-              <p className="text-xs font-mono break-all text-foreground" data-testid="fingerprint">{groupHex(props.fingerprint)}</p>
-            </div>
-            <label className="flex items-start gap-2 text-xs text-foreground">
-              <input type="checkbox" className="mt-0.5" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} data-testid="confirm" />
-              I started this change on {props.requesterLabel}.
-            </label>
-          </>
-        )}
-
-        {props.error && <p className="text-xs text-red-500" role="alert">{props.error}</p>}
+  if (props.kind === "ownership") {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col" data-testid="approval-review" data-kind="ownership">
+        <Body>
+          <Hero>One more step</Hero>
+          <Sentence>Use your passkey again so LazorKit can find your account. Nothing is paid.</Sentence>
+          <Details
+            rows={[
+              {
+                label: "Why again?",
+                value: "LazorKit needs a second confirmation from the same passkey to find your account. You may be asked again on a new browser or in another app.",
+              },
+              { label: "Money", value: "Nothing is approved or paid." },
+              ...props.context,
+            ]}
+          />
+        </Body>
+        <ApproveButtons framed={props.framed} approveLabel="Continue with passkey" onApprove={props.onApprove} onCancel={props.onCancel} caption={<PasskeyCaption />} />
       </div>
+    )
+  }
 
-      <ApproveButtons
-        framed={props.framed}
-        busy={props.busy}
-        disabled={props.kind === "approval" && !confirmed}
-        approveLabel={props.kind === "ownership" ? "Confirm" : "Approve"}
-        onApprove={props.onApprove}
-        onCancel={props.onCancel}
-      />
+  const details = (
+    <Details
+      rows={[
+        { label: "What it is", value: `${props.name}'s request doesn't say what it changes. LazorKit can't read this kind of request yet.` },
+        { label: "Who decides", value: `Approve only if you fully trust ${props.name}.` },
+        ...props.context,
+      ]}
+      experts={[{ label: "Fingerprint", value: <span data-testid="fingerprint">{groupHex(props.fingerprint)}</span> }]}
+    />
+  )
+
+  if (props.verified) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col" data-testid="approval-review" data-kind="approval" data-tier="caution">
+        <Body>
+          <Hero>{LEGACY_TITLE}</Hero>
+          <CautionRow>{LEGACY_RISK}</CautionRow>
+          <Sentence>If you're not sure, cancel. Nothing happens.</Sentence>
+          {details}
+        </Body>
+        <ApproveButtons
+          framed={props.framed}
+          recommendCancel
+          approveLabel="Approve anyway"
+          onApprove={props.onApprove}
+          onCancel={props.onCancel}
+          caption={<PasskeyCaption explain={props.explain} />}
+        />
+      </div>
+    )
+  }
+
+  // Danger: from a site that isn't verified, or an app LazorKit can't identify.
+  return (
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="approval-review" data-kind="approval" data-tier="danger">
+      <Body>
+        <DangerBlock title={LEGACY_TITLE}>{LEGACY_RISK}</DangerBlock>
+        {ack && (
+          <label className="flex min-h-12 cursor-pointer items-start gap-3 rounded-xl border border-line p-3 text-[16px] leading-[24px] text-ink" data-testid="ack-step">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-6 w-6 shrink-0 accent-[var(--danger-text)]"
+              checked={confirmed}
+              onChange={(e) => setConfirmed(e.target.checked)}
+              data-testid="confirm"
+            />
+            {ACK}
+          </label>
+        )}
+        {details}
+      </Body>
+      {ack ? (
+        <ApproveButtons
+          framed={props.framed}
+          recommendCancel
+          disabled={!confirmed}
+          delayMs={ACK_ARM_DELAY_MS}
+          approveLabel="Approve with passkey"
+          onApprove={props.onApprove}
+          onCancel={props.onCancel}
+          caption={<PasskeyCaption explain={props.explain} />}
+        />
+      ) : (
+        <Actions>
+          <button type="button" className={buttonClass("danger-text")} onClick={() => setAck(true)} data-testid="approve-anyway">
+            Approve anyway…
+          </button>
+          <PlainButton tone="primary" onClick={props.onCancel} testId="cancel">
+            Cancel
+          </PlainButton>
+        </Actions>
+      )}
     </div>
   )
 }

@@ -1,65 +1,158 @@
-import { Loader2 } from "lucide-react"
-import type { MouseEvent } from "react"
-import { Button } from "@/components/ui/button"
-import { useActivationGuard } from "@/security/gesture"
+import type { CSSProperties, MouseEvent, ReactNode } from "react"
+import { buttonClass, type ButtonTone } from "@/lib/ui"
+import { ARM_DELAY_MS, useActivationGuard, type ActivationGuard } from "@/security/gesture"
+import { Actions, PlainButton } from "@/components/sheet"
 
-interface ApproveButtonsProps {
-  onApprove: () => void
-  onCancel: () => void
+/**
+ * A button that approves or signs. It acts only on a real, visible click
+ * (see security/gesture): disabled while it arms (a thin bar fills inside
+ * it), and while the window is covered, partly off screen or too small.
+ */
+export function GuardedButton({
+  label,
+  onActivate,
+  framed,
+  active,
+  tone = "primary",
+  delayMs = ARM_DELAY_MS,
+  testId = "approve",
+}: {
+  label: ReactNode
+  onActivate: () => void
   framed: boolean
-  busy?: boolean
-  /** Further reason to keep Approve off (an unticked confirmation, a preview still loading). */
-  disabled?: boolean
-  approveLabel?: string
-  /** Approve as the secondary button, Cancel as the primary (a failed simulation). */
-  discourage?: boolean
+  /** False while it is off for another reason (an unticked box, a preview still loading). */
+  active: boolean
+  tone?: ButtonTone
+  delayMs?: number
+  testId?: string
+}) {
+  const guard = useActivationGuard({ framed, active, delayMs })
+  return <GuardedButtonView guard={guard} label={label} onActivate={onActivate} active={active} tone={tone} delayMs={delayMs} testId={testId} />
 }
 
-/** Cancel and Approve; Approve acts only on a real, visible click (see security/gesture). */
-export function ApproveButtons({ onApprove, onCancel, framed, busy = false, disabled = false, approveLabel = "Approve", discourage = false }: ApproveButtonsProps) {
-  const guard = useActivationGuard({ framed, active: !busy && !disabled })
+function GuardedButtonView({
+  guard,
+  label,
+  onActivate,
+  active,
+  tone,
+  delayMs,
+  testId,
+}: {
+  guard: ActivationGuard
+  label: ReactNode
+  onActivate: () => void
+  active: boolean
+  tone: ButtonTone
+  delayMs: number
+  testId: string
+}) {
   const ready = guard.state === "ready"
-
-  const approve = (event: MouseEvent<HTMLButtonElement>) => {
+  const hidden = guard.state === "not-visible"
+  const arming = guard.state === "arming" && active
+  const click = (event: MouseEvent<HTMLButtonElement>) => {
     if (!ready || !guard.canActivate(event.nativeEvent)) return
-    onApprove()
+    onActivate()
   }
-
-  const secondary = "w-full bg-muted/50 hover:bg-muted text-foreground font-semibold py-2 rounded-lg h-10 text-sm border-border/50"
-  const primary = "w-full font-semibold py-2 rounded-lg h-10 text-sm"
-
   return (
-    <div className="shrink-0 space-y-1.5 pt-1">
-      <div className="grid grid-cols-2 gap-2">
-        <Button variant={discourage ? "default" : "outline"} onClick={onCancel} disabled={busy} className={discourage ? primary : secondary} data-testid="cancel">
-          Cancel
-        </Button>
-        <Button
-          variant={discourage ? "outline" : "default"}
-          onClick={approve}
-          disabled={busy || disabled || !ready}
-          className={discourage ? secondary : primary}
-          data-testid="approve"
-          data-guard={guard.state}
-        >
-          {busy ? (
-            <>
-              <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-              Waiting for passkey…
-            </>
-          ) : approveLabel}
-        </Button>
-      </div>
-      {guard.state === "not-visible" && !busy && <NotVisibleNotice />}
-    </div>
+    <button
+      type="button"
+      onClick={click}
+      disabled={!active || !ready}
+      className={`relative overflow-hidden ${buttonClass(tone)}`}
+      data-testid={testId}
+      data-guard={guard.state}
+      aria-describedby={arming ? `${testId}-arming` : undefined}
+    >
+      {hidden ? "Make this window fully visible" : label}
+      {arming && (
+        <>
+          <span
+            className="lk-arming-bar absolute inset-x-0 bottom-0 h-1 bg-current opacity-60"
+            style={{ "--lk-arm-ms": `${delayMs}ms` } as CSSProperties}
+            aria-hidden="true"
+          />
+          <span id={`${testId}-arming`} className="sr-only">
+            Ready in a moment
+          </span>
+        </>
+      )}
+    </button>
   )
 }
 
 /** Shown while the decision surface is covered, partly off screen, or too small to show whole. */
 export function NotVisibleNotice() {
   return (
-    <p className="text-[10px] text-yellow-500 text-center leading-tight" data-testid="not-visible">
-      This window is covered, partly off screen, or too small. Make sure all of it is visible to continue.
+    <p className="text-center text-[14px] leading-[20px] text-ink" data-testid="not-visible">
+      LazorKit only accepts approvals when its whole window is visible. Scroll, or close what covers it.
     </p>
+  )
+}
+
+interface ApproveButtonsProps {
+  onApprove: () => void
+  onCancel: () => void
+  framed: boolean
+  /** Further reason to keep Approve off (an unticked confirmation, a preview still loading). */
+  disabled?: boolean
+  approveLabel?: ReactNode
+  cancelLabel?: string
+  /**
+   * Cancel is the recommended action (a likely failure, a change LazorKit
+   * can't show): Cancel solid on the right, Approve a plain button on the left.
+   */
+  recommendCancel?: boolean
+  /** Approve in the danger text style (a danger screen's confirmation step). */
+  approveTone?: ButtonTone
+  delayMs?: number
+  /** The caption line under the buttons. */
+  caption?: ReactNode
+}
+
+/** Cancel and Approve, in the sticky zone; Approve acts only on a real, visible click. */
+export function ApproveButtons({
+  onApprove,
+  onCancel,
+  framed,
+  disabled = false,
+  approveLabel = "Approve with passkey",
+  cancelLabel = "Cancel",
+  recommendCancel = false,
+  approveTone,
+  delayMs = ARM_DELAY_MS,
+  caption,
+}: ApproveButtonsProps) {
+  const guard = useActivationGuard({ framed, active: !disabled, delayMs })
+  const approve = (
+    <GuardedButtonView
+      guard={guard}
+      label={approveLabel}
+      onActivate={onApprove}
+      active={!disabled}
+      tone={approveTone ?? (recommendCancel ? "secondary" : "primary")}
+      delayMs={delayMs}
+      testId="approve"
+    />
+  )
+  const cancel = (
+    <PlainButton onClick={onCancel} tone={recommendCancel ? "primary" : "secondary"} testId="cancel">
+      {cancelLabel}
+    </PlainButton>
+  )
+  return (
+    <Actions caption={guard.state === "not-visible" ? <NotVisibleNotice /> : caption}>
+      {recommendCancel ? (
+        <>
+          {approve}
+          {cancel}
+        </>
+      ) : (
+        <>
+          {cancel}
+          {approve}
+        </>
+      )}
+    </Actions>
   )
 }

@@ -1,25 +1,32 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
-import { CheckCircle2, Loader2 } from "lucide-react"
 import { policy, registry } from "@/config"
-import { ApprovalReview } from "@/components/approval-review"
+import { ApprovalReview, LEGACY_TITLE } from "@/components/approval-review"
 import { MessageReview } from "@/components/message-review"
 import { Refusal } from "@/components/refusal"
-import { refusalText } from "@/security/refusal-text"
-import { RequesterBar, type RequesterView } from "@/components/requester-bar"
+import { AppIdentity, TopBar, type RequesterView } from "@/components/requester-bar"
+import { HERO_ID, type Row } from "@/components/sheet"
+import { Cancelled, CheckingRequester, Closed, Ended, PasskeyWaiting, Receipt, SignedIn, Undelivered, type Approving } from "@/components/status"
 import { TransactionReview } from "@/components/transaction-review"
 import { WalletConnection } from "@/components/wallet-connection"
+import { refusalText } from "@/security/refusal-text"
+import { refusalScreen } from "@/security/refusal-screen"
 import { toHex } from "@/security/encoding"
 import { browserFamily, isFramed, requesterInput, watchParentMessages } from "@/security/environment"
 import { DecisionSurface, supportsVisibilityTracking } from "@/security/gesture"
 import type { ParentMessage } from "@/security/handshake"
+import { badgeExplainer, whoIsAsking } from "@/security/identity"
 import { readPortalRequest } from "@/security/params"
+import type { Subject } from "@/security/policy"
 import { checkRedirect, destinationLabel } from "@/security/redirect"
 import { appForOrigin } from "@/security/registry"
 import { evaluateRequest } from "@/security/request"
 import { resolveRequester } from "@/security/requester"
 import { refusalRoute, routeFor, sendReply, type ConnectedResult, type PortalResult, type ReplyRoute, type ReplyWindow } from "@/security/reply"
 import { buildEvent, sendEvent, type Outcome, type VisibilityTracking } from "@/security/telemetry"
+import { isTestNetwork, usePreview, type PreviewState } from "@/pages/use-preview"
 import { parseCluster, type ResolvedCluster } from "@/utils/cluster"
+import { paymentHero } from "@/utils/preview"
+import { approvedBefore, rememberApproval } from "@/utils/storage"
 import { ceremonyErrorText, signChallenge } from "@/utils/webauthn"
 
 /** How long to wait for the embedding page's first message before saying the requester is unknown. */
@@ -27,7 +34,7 @@ const SETTLE_MS = 4000
 /** When the decision is reported, so evidence that arrives just after load is included. */
 const REPORT_AFTER_MS = 1500
 
-type Phase = "review" | "busy" | "done" | "undelivered" | "closed"
+type Phase = "review" | "busy" | "cancelled" | "done" | "undelivered" | "closed"
 
 const replyWindow: ReplyWindow = {
   get parent() {
@@ -50,6 +57,29 @@ function redirectLabel(raw: string | null): string | null {
   }
 }
 
+/** What is being approved, for the waiting, canceled and approved screens: the review's own hero. */
+function approvingFor(subject: Subject | null, preview: PreviewState, name: string): Approving {
+  switch (subject?.kind) {
+    case "message":
+      return { hero: "Sign a message", next: `The signature goes to ${name} only.` }
+    case "message-without-text":
+      return { hero: "Sign data", next: `The signature goes to ${name} only.` }
+    case "ownership":
+      return { hero: "Confirm it's you", next: `${name} takes it from here.` }
+    case "approval":
+      return { hero: LEGACY_TITLE, next: `${name} takes it from here.` }
+    case "transaction": {
+      const payment = preview.summary?.payment ?? null
+      const test = isTestNetwork(preview)
+      return payment
+        ? { hero: paymentHero(payment), to: payment.to, amount: true, test, says: name, next: `${name} sends it now. Payments can't be undone.` }
+        : { hero: "Approve this action", test, says: name, next: `${name} sends it now. It can't be undone.` }
+    }
+    default:
+      return { hero: `Sign in to ${name}`, next: "" }
+  }
+}
+
 export default function Home() {
   const request = useMemo(() => readPortalRequest(window.location.search), [])
   const framed = useMemo(() => isFramed(), [])
@@ -59,8 +89,13 @@ export default function Home() {
   const [messages, setMessages] = useState<readonly ParentMessage[]>([])
   const [settled, setSettled] = useState(false)
   const [phase, setPhase] = useState<Phase>("review")
+  /** What was answered: the receipt shown after it. */
+  const [answered, setAnswered] = useState<PortalResult["type"] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [network, setNetwork] = useState<ResolvedCluster | null>(null)
+  // The longer passkey note: the first approval on this browser, and a retry.
+  const [firstTime] = useState(() => !approvedBefore())
+  const [retry, setRetry] = useState(false)
 
   useEffect(() => watchParentMessages(request.rid, setMessages), [request.rid])
   useEffect(() => {
@@ -80,9 +115,19 @@ export default function Home() {
   const evaluation = useMemo(() => evaluateRequest({ request, requester, redirect, registry, policy }), [request, requester, redirect])
   const { subject, decision } = evaluation
 
+  const preview = usePreview(
+    decision.outcome === "show" && subject?.kind === "transaction" ? subject.preview : null,
+    parseCluster(request.clusterSimulation),
+    setNetwork,
+  )
+
   // Replies and checks read the latest evidence, which can change while a passkey prompt is open.
   const latest = useRef({ route, evaluation, requester, redirect, network })
   latest.current = { route, evaluation, requester, redirect, network }
+  /** One answer per request: a reply already sent is never followed by another. */
+  const replied = useRef(false)
+  /** Stops a passkey prompt that is still open when the request is canceled. */
+  const ceremony = useRef<AbortController | null>(null)
 
   const reported = useRef(false)
   const report = useCallback((event: "request" | "result", outcome: Outcome, reason?: string) => {
@@ -116,32 +161,41 @@ export default function Home() {
   }, [reportRequest])
 
   const finish = useCallback((result: PortalResult, outcome: Outcome, reason?: string, route: ReplyRoute = latest.current.route) => {
+    if (replied.current) return
+    replied.current = true
     reportRequest()
     const delivery = sendReply(route, result, replyWindow)
     report("result", delivery === "dropped" ? "undelivered" : outcome, reason)
+    setAnswered(result.type)
     setPhase(delivery === "dropped" ? "undelivered" : "done")
   }, [report, reportRequest])
 
   const cancel = useCallback(() => {
+    ceremony.current?.abort()
     finish({ type: "error", code: "user-rejected", message: "User rejected the request" }, "rejected", "user-rejected")
   }, [finish])
 
   const approve = useCallback(async () => {
     const before = latest.current.evaluation
-    if (before.decision.outcome !== "show" || !before.signBytes || !before.credential) return
+    if (before.decision.outcome !== "show" || !before.signBytes || !before.credential || replied.current) return
+    const controller = new AbortController()
+    ceremony.current = controller
     setPhase("busy")
     setError(null)
     try {
-      const { credentialId, assertion } = await signChallenge(before.signBytes, before.credential)
+      const { credentialId, assertion } = await signChallenge(before.signBytes, before.credential, controller.signal)
+      if (controller.signal.aborted) return
       // The requester must still be the one that was shown.
       if (latest.current.evaluation.decision.outcome !== "show") {
         setPhase("review")
         return
       }
+      rememberApproval()
       finish({ type: "signed", credentialId, assertion, timestamp: Date.now() }, "approved")
     } catch (e) {
+      if (controller.signal.aborted || replied.current) return
       setError(ceremonyErrorText(e))
-      setPhase("review")
+      setPhase("cancelled")
     }
   }, [finish])
 
@@ -165,6 +219,19 @@ export default function Home() {
     setPhase("closed")
   }, [finish, report, reportRequest, requester.channel])
 
+  // Escape is Cancel, on a request that is shown (an open address sheet takes it first).
+  const phaseRef = useRef(phase)
+  phaseRef.current = phase
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || replied.current) return
+      if (latest.current.evaluation.decision.outcome !== "show") return
+      if (phaseRef.current === "review" || phaseRef.current === "busy" || phaseRef.current === "cancelled") cancel()
+    }
+    document.addEventListener("keydown", onKey)
+    return () => document.removeEventListener("keydown", onKey)
+  }, [cancel])
+
   const app = requester.channel === "redirect" ? (redirect?.ok ? redirect.app : undefined) : appForOrigin(registry, requester.origin)
   const view: RequesterView = {
     channel: requester.channel,
@@ -174,88 +241,111 @@ export default function Home() {
     openedFrom: requester.openedFrom,
     evidence: requester.evidence,
   }
-  const label = decision.outcome === "show" ? decision.requesterLabel : view.label ?? "this site"
-  const busy = phase === "busy"
+  const who = whoIsAsking({ channel: view.channel, label: view.label, appName: view.appName })
+  const name = who.name
+  const approving = approvingFor(subject, preview, name)
+  const explain = firstTime || retry
+  // Where the request came from, beyond the header: in Details on every screen.
+  const context: Row[] = [
+    ...(who.kind === "app" ? [{ label: "Who's asking", value: badgeExplainer(who) }] : []),
+    ...(requester.embeddedIn.length ? [{ label: "Opened inside", value: requester.embeddedIn.join(" › "), testId: "opened-inside" }] : []),
+    ...(requester.openedFrom ? [{ label: "Opened from", value: requester.openedFrom, testId: "opened-from" }] : []),
+  ]
 
+  let hideRequester = false
   let body: ReactNode
   if (phase === "done") {
-    body = (
-      <div className="flex flex-col items-center gap-2 py-10 text-center" data-testid="done">
-        <CheckCircle2 className="w-8 h-8 text-green-500" />
-        <p className="text-sm text-foreground">Done. You can close this window.</p>
-      </div>
-    )
-  } else if (phase === "undelivered") {
-    body = (
-      <div className="flex flex-col items-center gap-2 py-10 text-center" data-testid="undelivered">
-        <p className="text-sm text-foreground">The result could not be returned to {label}.</p>
-        <p className="text-xs text-muted-foreground">Close this window and try again from the app.</p>
-      </div>
-    )
-  } else if (phase === "closed") {
-    body = (
-      <div className="py-10 text-center text-xs text-muted-foreground" data-testid="closed">
-        Close this window to return to the app.
-      </div>
-    )
-  } else if (decision.outcome === "refuse") {
     body =
-      decision.reason === "requester-unknown" && !settled ? (
-        <div className="flex flex-col items-center gap-2 py-10" data-testid="waiting">
-          <Loader2 className="w-6 h-6 animate-spin text-primary" />
-          <p className="text-xs text-muted-foreground">Checking which site opened this…</p>
-        </div>
+      answered === "connected" ? (
+        <SignedIn name={name} />
+      ) : answered === "signed" ? (
+        <Receipt approving={approving} name={name} />
       ) : (
-        <Refusal reason={decision.reason} onClose={() => closeRefusal(decision.reason)} />
+        <Ended name={name} refused={decision.outcome === "refuse"} />
       )
-  } else if (subject?.kind === "sign-in" || (request.action === "connect" && subject?.kind === "ownership")) {
+  } else if (phase === "undelivered") {
+    body = <Undelivered name={name} />
+  } else if (phase === "closed") {
+    body = <Closed />
+  } else if (decision.outcome === "refuse") {
+    if (decision.reason === "requester-unknown" && !settled) {
+      body = <CheckingRequester />
+    } else {
+      const screen = refusalScreen(decision.reason, name)
+      hideRequester = !screen.showRequester
+      const answers = refusalRoute(route, redirect).channel !== "none"
+      body = <Refusal reason={decision.reason} screen={screen} closeLabel={answers ? `Back to ${name}` : "Close"} onClose={() => closeRefusal(decision.reason)} />
+    }
+  } else if (phase === "busy") {
+    body = <PasskeyWaiting approving={approving} firstTime={firstTime} onCancel={cancel} />
+  } else if (phase === "cancelled") {
     body = (
-      <WalletConnection
-        proof={subject.kind === "ownership" ? subject.challenge : null}
-        requesterLabel={label}
+      <Cancelled
+        approving={approving}
+        name={name}
+        error={error}
+        payment={subject?.kind === "transaction"}
+        onBack={cancel}
+        onRetry={() => {
+          setRetry(true)
+          setPhase("review")
+        }}
+      />
+    )
+  } else if (subject?.kind === "sign-in" || (request.action === "connect" && subject?.kind === "ownership")) {
+    body = <WalletConnection proof={subject.kind === "ownership" ? subject.challenge : null} who={who} context={context} framed={framed} onConnected={connected} onCancel={cancel} />
+  } else if (subject?.kind === "message") {
+    body = <MessageReview kind="message" text={subject.text} context={context} framed={framed} explain={explain} onApprove={approve} onCancel={cancel} />
+  } else if (subject?.kind === "message-without-text") {
+    body = <MessageReview kind="message-without-text" fingerprint={subject.fingerprint} context={context} framed={framed} explain={explain} onApprove={approve} onCancel={cancel} />
+  } else if (subject?.kind === "ownership") {
+    body = <ApprovalReview kind="ownership" name={name} context={context} framed={framed} explain={explain} onApprove={approve} onCancel={cancel} />
+  } else if (subject?.kind === "approval") {
+    body = (
+      <ApprovalReview
+        kind="approval"
+        fingerprint={toHex(subject.challenge)}
+        verified={who.kind === "site" && who.verified}
+        name={name}
+        context={context}
         framed={framed}
-        onConnected={connected}
+        explain={explain}
+        onApprove={approve}
         onCancel={cancel}
       />
     )
-  } else if (subject?.kind === "message") {
-    body = <MessageReview kind="message" text={subject.text} requesterLabel={label} framed={framed} busy={busy} error={error} onApprove={approve} onCancel={cancel} />
-  } else if (subject?.kind === "message-without-text") {
-    body = <MessageReview kind="message-without-text" fingerprint={subject.fingerprint} requesterLabel={label} framed={framed} busy={busy} error={error} onApprove={approve} onCancel={cancel} />
-  } else if (subject?.kind === "ownership") {
-    body = <ApprovalReview kind="ownership" requesterLabel={label} framed={framed} busy={busy} error={error} onApprove={approve} onCancel={cancel} />
-  } else if (subject?.kind === "approval") {
-    body = <ApprovalReview kind="approval" fingerprint={toHex(subject.challenge)} requesterLabel={label} framed={framed} busy={busy} error={error} onApprove={approve} onCancel={cancel} />
   } else if (subject?.kind === "transaction") {
     body = (
       <TransactionReview
         preview={subject.preview}
-        requestedCluster={parseCluster(request.clusterSimulation)}
-        requesterLabel={label}
+        state={preview}
+        who={who}
+        app={app}
+        embeddedIn={requester.embeddedIn}
+        context={context}
         framed={framed}
-        busy={busy}
-        error={error}
+        explain={explain}
         onApprove={approve}
         onCancel={cancel}
-        onNetwork={setNetwork}
         confirmRequired={visibility === "untracked"}
       />
     )
   }
 
   // The page is the frame's height: the request scrolls inside it, and the
-  // requester bar and the buttons stay on screen. The surface (everything
-  // inside main's padding, which also keeps it clear of a frame's rounded
-  // corners) is what the approve buttons check is fully visible. In a frame
-  // too small to show the request at its minimum height, the buttons fall
-  // below the surface, so reaching them scrolls part of it off screen and
-  // Approve stays off.
+  // LazorKit bar, the requester and the buttons stay on screen. The surface
+  // (everything inside main's padding, on every side, which also keeps it
+  // clear of a frame's rounded corners and edges) is what the approve
+  // buttons check is fully visible. In a frame too small to show the request at its minimum
+  // height, the buttons fall below the surface, so reaching them scrolls
+  // part of it off screen and Approve stays off.
   return (
-    <div className="h-full w-full bg-background text-foreground font-sans antialiased overflow-auto" data-testid="page">
+    <div className="h-full w-full overflow-auto bg-surface text-ink" data-testid="page">
       <DecisionSurface.Provider value={surface}>
-        <main className="mx-auto h-full w-full max-w-md p-3">
-          <div ref={setSurface} className="flex h-full min-h-0 flex-col gap-3" data-testid="surface">
-            <RequesterBar view={view} />
+        <main className="mx-auto h-full w-full max-w-md px-4 pt-2 pb-4 min-[400px]:px-5">
+          <div ref={setSurface} role="dialog" aria-modal="true" aria-labelledby={HERO_ID} className="flex h-full min-h-0 flex-col" data-testid="surface">
+            <TopBar />
+            <AppIdentity view={view} who={who} hidden={hideRequester} />
             <div className="flex min-h-0 flex-1 flex-col">{body}</div>
           </div>
         </main>

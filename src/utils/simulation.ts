@@ -8,11 +8,14 @@ import {
     Message
 } from "@solana/web3.js";
 import { Buffer } from "buffer";
+import type { TokenFacts } from "./preview";
 
 export interface BalanceChange {
+    /** The account whose balance changes: a token account's owner when known. */
+    account: string;
     token: string;
+    /** Signed: "+0.5", "-0.25". */
     amount: string;
-    color: string;
 }
 
 export interface SimulationResult {
@@ -24,6 +27,8 @@ export interface SimulationResult {
     autoConfirm: string;
     chainId: string;
     error?: string;
+    /** Token accounts (mint, owner) and mint decimals the simulation read; absent when it read nothing. */
+    facts?: TokenFacts;
     /** No simulation result at all (the RPC route was unreachable or not configured), as opposed to a failing transaction. */
     unavailable?: boolean;
 }
@@ -108,6 +113,7 @@ export async function simulateTransaction(base64Tx: string, cluster: Cluster): P
     console.log("Simulating transaction...", { length: base64Tx.length });
 
     let simulated: any = null;
+    let facts: TokenFacts | undefined;
     let transaction: Transaction | VersionedTransaction | null = null;
     let isVersioned = false;
 
@@ -351,15 +357,14 @@ export async function simulateTransaction(base64Tx: string, cluster: Cluster): P
                     const isUser = payerKey && key.equals(payerKey);
 
                     const diffSol = diffLamports / LAMPORTS_PER_SOL;
-                    const sign = diffLamports > 0 ? "+" : "";
-                    const color = diffLamports > 0 ? "text-green-400" : "text-red-400";
+                    const sign = diffLamports > 0 ? "+" : "-";
 
                     // Only show significant changes or if it's the user
                     if (Math.abs(diffSol) > 0.000000001 || isUser) {
                         balanceChanges.push({
+                            account: keyStr,
                             token: "SOL",
                             amount: `${sign}${formatSOL(Math.abs(diffSol))}`,
-                            color
                         });
                     }
                 }
@@ -373,8 +378,7 @@ export async function simulateTransaction(base64Tx: string, cluster: Cluster): P
                     const diffAmount = postAmount - preAmount;
 
                     if (diffAmount !== BigInt(0)) {
-                        const sign = diffAmount > BigInt(0) ? "+" : "";
-                        const color = diffAmount > BigInt(0) ? "text-green-400" : "text-red-400";
+                        const sign = diffAmount > BigInt(0) ? "+" : "-";
 
                         let mintStr = "Unknown Token";
                         let mintKey: PublicKey | null = null;
@@ -399,163 +403,36 @@ export async function simulateTransaction(base64Tx: string, cluster: Cluster): P
                         if (mintStr === "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB") displayName = "USDT";
                         if (mintStr === "So11111111111111111111111111111111111111112") displayName = "WSOL";
 
-                        // Check if this ATA belongs to User
-                        const isUserATA = payerKey && ownerKey && ownerKey.equals(payerKey);
-
-                        const finalColor = (isUserATA && diffAmount > BigInt(0)) ? "text-green-500" : color;
-
                         // We want to show meaningful changes.
                         const formattedAmount = formatTokenAmount(diffAmount > BigInt(0) ? diffAmount : -diffAmount, mintStr);
                         const isRaw = !mintDecimals.has(mintStr) && mintStr !== "SOL";
 
                         balanceChanges.push({
+                            account: ownerKey ? ownerKey.toBase58() : keyStr,
                             token: displayName, // Just the name (e.g. USDC)
-                            amount: `${sign}${formattedAmount} ${isRaw ? '(Raw)' : ''}`, // The value (e.g. +50.0)
-                            color: finalColor
+                            amount: `${sign}${formattedAmount}${isRaw ? ' (raw units)' : ''}`,
                         });
                     }
                 }
             });
         }
 
-        // Post-Processing: Detect Transfer Action to Simplify UI
-        try {
-            // Helper to Resolve Destination Owner
-            const getOwnerOfAccount = (ataPubkey: PublicKey): PublicKey | null => {
-                const keyStr = ataPubkey.toBase58();
-                // Check Pre-State
-                if (preStates.has(keyStr)) {
-                    const info = preStates.get(keyStr);
-                    if (info && info.data.length >= 64) {
-                        return new PublicKey(info.data.slice(32, 64));
-                    }
-                }
-                // Check Post-State (if created during tx)
-                const index = uniqueKeys.findIndex(k => k.equals(ataPubkey));
-                if (index !== -1 && simulated && simulated.accounts && simulated.accounts[index]) {
-                    const postAcc = simulated.accounts[index];
-                    let dataBuf: Buffer | null = null;
-                    if (Array.isArray(postAcc.data)) {
-                        dataBuf = Buffer.from(postAcc.data[0], "base64");
-                    } else if (typeof postAcc.data === "string") {
-                        dataBuf = Buffer.from(postAcc.data, "base64");
-                    }
-                    if (dataBuf && dataBuf.length >= 64) {
-                        return new PublicKey(dataBuf.slice(32, 64));
-                    }
-                }
-                return null;
-            };
-
-            // Loop through instructions
-            const allInstructions: any[] = [];
-            if (isVersioned) {
-                const vTx = transaction as VersionedTransaction;
-                vTx.message.compiledInstructions.forEach((instr) => {
-                    allInstructions.push({
-                        programIdIndex: instr.programIdIndex,
-                        keys: instr.accountKeyIndexes.map(idx => vTx.message.staticAccountKeys[idx]),
-                        data: Buffer.from(instr.data)
-                    });
-                });
-            } else {
-                const lTx = transaction as Transaction;
-                lTx.instructions.forEach((instr) => {
-                    allInstructions.push({
-                        keys: instr.keys.map(k => k.pubkey),
-                        data: instr.data
-                    });
-                });
+        // Token accounts and mints the preview touches, for the summary (utils/preview).
+        const accounts: Record<string, { mint: string; owner: string }> = {};
+        const record = (key: string, data: Buffer, owner: PublicKey) => {
+            if ((owner.equals(TOKEN_PROGRAM_ID) || owner.equals(TOKEN_2022_PROGRAM_ID)) && data.length >= 64 && !accounts[key]) {
+                accounts[key] = { mint: new PublicKey(data.slice(0, 32)).toBase58(), owner: new PublicKey(data.slice(32, 64)).toBase58() };
             }
-
-            // Iterate backwards to find the main action
-            for (let i = allInstructions.length - 1; i >= 0; i--) {
-                const instr = allInstructions[i];
-                if (!instr.data || instr.data.length < 9) continue;
-
-                // System Transfer (12 bytes, type 2)
-                if (instr.data.length === 12) {
-                    const type = instr.data.readUInt32LE(0);
-                    if (type === 2) {
-                        const lamports = instr.data.readBigUInt64LE(4);
-                        const amountSol = Number(lamports) / LAMPORTS_PER_SOL;
-                        const destPubkey = instr.keys[1]; // System Transfer: [from, to]
-
-                        if (destPubkey) {
-                            balanceChanges.length = 0;
-                            balanceChanges.push({
-                                token: `Sent to ${destPubkey.toBase58().slice(0, 4)}...${destPubkey.toBase58().slice(-4)}`,
-                                amount: `-${formatSOL(amountSol)} SOL`,
-                                color: "text-gray-400"
-                            });
-                            break;
-                        }
-                    }
-                }
-
-                // Token Transfer (Index 3) or TransferChecked (Index 12)
-                const type = instr.data.readUInt8(0);
-                if (type === 3 || type === 12) {
-                    const amount = instr.data.readBigUInt64LE(1);
-                    let destPubkey: PublicKey | null = null;
-                    let decimals = 0;
-                    let mintStr = "";
-
-                    if (type === 3) {
-                        destPubkey = instr.keys[1]; // keys: [source, dest, owner]
-                        // Source Account
-                        const sourceKey = instr.keys[0];
-                        const sourceInfo = preStates.get(sourceKey.toBase58());
-                        if (sourceInfo && sourceInfo.data.length >= 32) {
-                            const mintKey = new PublicKey(sourceInfo.data.slice(0, 32));
-                            mintStr = mintKey.toBase58();
-                            decimals = mintDecimals.get(mintStr) ?? 0;
-                        }
-                    } else if (type === 12) {
-                        destPubkey = instr.keys[2]; // keys: [source, mint, dest, owner]
-                        const mintKey = instr.keys[1]; // Explicit Mint
-                        mintStr = mintKey.toBase58();
-                        decimals = mintDecimals.get(mintStr) ?? instr.data.readUInt8(9); // Use mint info if available, else instr
-                    }
-
-                    if (destPubkey) {
-                        // Resolve Owner
-                        const realOwner = getOwnerOfAccount(destPubkey);
-                        const displayAddr = realOwner ? realOwner : destPubkey;
-                        const addrStr = displayAddr.toBase58();
-                        const shortAddr = addrStr.slice(0, 4) + "..." + addrStr.slice(-4);
-
-                        // Format Amount
-                        const divisor = BigInt(10 ** decimals);
-                        const integerPart = amount / divisor;
-                        const fractionalPart = amount % divisor;
-
-                        let fracStr = fractionalPart.toString().padStart(decimals, '0');
-                        fracStr = fracStr.replace(/0+$/, '');
-
-                        const integerStr = integerPart.toLocaleString('en-US');
-                        const amountStr = `${integerStr}${fracStr ? '.' + fracStr : ''}`;
-
-                        // Detect Symbol? (Hard without external API, but for USDC/USDT we can hardcode common ones)
-                        let symbol = "Token";
-                        if (mintStr === "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v") symbol = "USDC";
-                        if (mintStr === "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB") symbol = "USDT";
-                        if (mintStr === "So11111111111111111111111111111111111111112") symbol = "WSOL";
-
-                        balanceChanges.length = 0;
-                        balanceChanges.push({
-                            token: `Sent to ${shortAddr}`,
-                            amount: `-${amountStr} ${symbol}`,
-                            color: "text-gray-400"
-                        });
-                        break;
-                    }
-                }
-            }
-
-        } catch (e) {
-            console.warn("Failed to parse instruction for simple view", e);
+        };
+        preStates.forEach((info, key) => record(key, info.data, info.owner));
+        if (simulated && Array.isArray(simulated.accounts)) {
+            simulated.accounts.forEach((post: any, index: number) => {
+                if (!post || index >= uniqueKeys.length) return;
+                const data = Array.isArray(post.data) ? Buffer.from(post.data[0], "base64") : typeof post.data === "string" ? Buffer.from(post.data, "base64") : Buffer.alloc(0);
+                record(uniqueKeys[index].toBase58(), data, new PublicKey(post.owner));
+            });
         }
+        facts = { accounts, decimals: Object.fromEntries(mintDecimals) };
 
     } catch (error) {
         console.warn("Simulation unavailable:", error instanceof Error ? error.message : error);
@@ -615,6 +492,7 @@ export async function simulateTransaction(base64Tx: string, cluster: Cluster): P
         autoConfirm: "Off",
         chainId: cluster === 'mainnet' ? "mainnet-beta" : "devnet",
         error: errorMsg,
+        facts,
         unavailable: !isSuccess && !simulated,
     };
 }

@@ -1,24 +1,33 @@
-import { ShieldAlert } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { refusalText } from "@/security/refusal-text"
+import { Ban } from "lucide-react"
+import { Actions, Body, Details, Hero, Note, PlainButton, Sentence, StatusMark } from "@/components/sheet"
+import type { RefusalScreen } from "@/security/refusal-screen"
 
 interface RefusalProps {
   reason: string
+  screen: RefusalScreen
+  /** "Back to Fernway" when the answer goes back to the requester; "Close" otherwise. */
+  closeLabel: string
   onClose: () => void
 }
 
-export function Refusal({ reason, onClose }: RefusalProps) {
-  const { title, detail } = refusalText(reason)
+/** A request LazorKit didn't show: what happened, in plain words, and that the passkey signed nothing. */
+export function Refusal({ reason, screen, closeLabel, onClose }: RefusalProps) {
   return (
-    <div className="flex flex-col items-center text-center gap-3 py-6 px-2" data-testid="refusal" data-reason={reason}>
-      <div className="w-10 h-10 rounded-full bg-red-500/15 flex items-center justify-center text-red-500">
-        <ShieldAlert className="w-5 h-5" />
-      </div>
-      <h1 className="text-base font-bold text-foreground">{title}</h1>
-      <p className="text-xs text-muted-foreground leading-relaxed max-w-xs">{detail}</p>
-      <Button variant="outline" onClick={onClose} className="mt-2 w-full max-w-xs h-10" data-testid="close">
-        Close
-      </Button>
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="refusal" data-reason={reason} data-kind={screen.kind}>
+      <Body testId="refusal-content">
+        <StatusMark>
+          <Ban className="h-6 w-6" aria-hidden="true" />
+        </StatusMark>
+        <Hero>{screen.hero}</Hero>
+        <Sentence testId="refusal-sentence">{screen.sentence}</Sentence>
+        {screen.note && <Note>{screen.note}</Note>}
+        <Details rows={screen.details} experts={screen.experts} />
+      </Body>
+      <Actions single>
+        <PlainButton tone="primary" onClick={onClose} testId="close">
+          {closeLabel}
+        </PlainButton>
+      </Actions>
     </div>
   )
 }
