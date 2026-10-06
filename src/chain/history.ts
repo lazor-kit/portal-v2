@@ -3,7 +3,7 @@
  *
  * A payment counts only when it left the vault, in a transaction that
  * succeeded, for more than zero: a SOL transfer from the vault, or a token
- * transfer out of a token account the vault owns. Money coming in never
+ * transfer the vault signed out of a token account it owns. Money coming in never
  * counts (address poisoning works by sending it), and neither do failed or
  * zero-value transfers.
  *
@@ -128,7 +128,11 @@ export function outgoingTransfers(vault: string, signature: string, tx: unknown)
     if (TOKEN_PROGRAMS.has(instruction.programId as string) && TOKEN_TRANSFERS.has(parsed.type)) {
       if (typeof info.source !== 'string' || typeof info.destination !== 'string') continue;
       const sourceOwner = tokenAccounts.get(info.source)?.owner ?? null;
-      const fromVault = sourceOwner !== null ? sourceOwner === vault : info.authority === vault || info.multisigAuthority === vault;
+      // A payment by this account is one it signed: tokens moved out of its
+      // token account by another authority (a delegate, or a mint's permanent
+      // delegate) were not paid by it.
+      const signedByVault = info.authority === vault || info.multisigAuthority === vault;
+      const fromVault = signedByVault && (sourceOwner === null || sourceOwner === vault);
       const amount = positiveAmount(parsed.type === 'transfer' ? info.amount : isObj(info.tokenAmount) ? info.tokenAmount.amount : undefined);
       if (!fromVault || amount === null) continue;
       const destination = tokenAccounts.get(info.destination);

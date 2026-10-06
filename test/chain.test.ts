@@ -304,6 +304,62 @@ test('a failed transaction’s transfers are ignored even when its record shows 
   assert.ok(recordedTransfers >= 5, `${recordedTransfers} failed transactions with transfers in their record`);
 });
 
+const TOKEN_2022 = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+const SYSTEM = '11111111111111111111111111111111';
+
+interface TokenMove {
+  authority: string;
+  source: string;
+  sourceOwner?: string;
+  destination: string;
+  destinationOwner?: string;
+  amount: string;
+}
+
+/** A successful jsonParsed transaction of `transferChecked`s, with the token balances an RPC would record. */
+function tokenTx(mint: string, moves: TokenMove[], solMoves: { source: string; destination: string; lamports: number }[] = []) {
+  const keys: string[] = [];
+  const indexOf = (address: string) => (keys.includes(address) ? keys.indexOf(address) : keys.push(address) - 1);
+  const balances = moves.flatMap((move) => [
+    ...(move.sourceOwner ? [{ accountIndex: indexOf(move.source), mint, owner: move.sourceOwner, uiTokenAmount: { amount: '0' } }] : []),
+    ...(move.destinationOwner ? [{ accountIndex: indexOf(move.destination), mint, owner: move.destinationOwner, uiTokenAmount: { amount: move.amount } }] : []),
+  ]);
+  const instructions = [
+    ...moves.map((move) => ({
+      programId: TOKEN_2022,
+      parsed: { type: 'transferChecked', info: { source: move.source, destination: move.destination, authority: move.authority, mint, tokenAmount: { amount: move.amount, decimals: 0 } } },
+    })),
+    ...solMoves.map((move) => ({ programId: SYSTEM, parsed: { type: 'transfer', info: move } })),
+  ];
+  for (const move of moves) [move.authority, move.source, move.destination].forEach(indexOf);
+  return {
+    slot: 10,
+    blockTime: 1_700_000_000,
+    meta: { err: null, preTokenBalances: [], postTokenBalances: balances, innerInstructions: [] },
+    transaction: { message: { accountKeys: keys.map((pubkey) => ({ pubkey })), instructions } },
+  };
+}
+
+/** A fixed 32-byte address for synthetic transactions. */
+const addr = (fill: number) => bs58.encode(new Uint8Array(32).fill(fill));
+
+test('a token transfer the vault did not sign is not a payment by it, even out of its own token account', () => {
+  const vault = REPEAT.vault;
+  const [vaultTokens, otherTokens, mint, delegate] = [addr(11), addr(12), addr(13), addr(14)];
+  const recipient = '3krsWk9RKYSYfw5uTBtgcSFvyyGPHhvan1dndYMwWNDw';
+  const moved = { source: vaultTokens, sourceOwner: vault, destination: otherTokens, destinationOwner: recipient, amount: '1' };
+
+  // Moved by a delegate (a mint's permanent delegate, say): not a payment.
+  const byDelegate = outgoingTransfers(vault, 'sig', tokenTx(mint, [{ ...moved, authority: delegate }]));
+  assert.deepEqual(byDelegate, { transfers: [], unattributed: 0 });
+  const history: Read<PaymentHistory> = { status: 'ok', value: { vault, coverage: 'complete', scanned: 1, transfers: byDelegate.transfers, unattributed: 0 } };
+  assert.deepEqual(checkRecipient(recipient, history).relation, { kind: 'first-time' });
+
+  // Signed by the vault: a payment.
+  const byVault = outgoingTransfers(vault, 'sig', tokenTx(mint, [{ ...moved, authority: vault }]));
+  assert.deepEqual(byVault.transfers.map((t) => [t.to, t.amount]), [[recipient, 1n]]);
+});
+
 test('zero-value transfers out and transfers in never count', async () => {
   const history = ok(await readPaymentHistory(through(WALLET), WALLET.vault));
   assert.equal(history.coverage, 'complete');
