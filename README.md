@@ -30,15 +30,17 @@ The portal signs only these challenge formats (`src/security/challenge.ts`):
 
 | Kind | Bytes | Shown as |
 |---|---|---|
-| Message | 58: `"LazorKit signed message v1"` ‖ SHA-256(tag ‖ UTF-8 text) | the text, only when it recomputes to the challenge; without text, a fingerprint and an explicit confirmation |
-| Ownership proof | 59: `"LazorKit ownership proof v1"` ‖ 32 random bytes | "Confirm it's you"; signed during sign-in on connect |
-| Transaction | 32, with a preview | the simulated preview, attributed to the requester |
-| Approval | 32, no preview | a fingerprint and an explicit confirmation |
+| Message | 58: `"LazorKit signed message v1"` ‖ SHA-256(tag ‖ UTF-8 text) | the text, only when it recomputes to the challenge, with "Matches what your passkey signs" in Details; without text, "Sign data" with a caution and the fingerprint in Details |
+| Ownership proof | 59: `"LazorKit ownership proof v1"` ‖ 32 random bytes | "One more step"; signed during sign-in on connect |
+| Transaction | 32, with a preview | the simulated preview, as the requesting app's claim ("Acme says"): "Send 0.25 SOL" and the recipient when it is one plain transfer (compute-budget and memo instructions aside), otherwise "Approve this action"; anything LazorKit doesn't read is a caution |
+| Approval | 32, no preview | "Approve a change LazorKit can't show", with Cancel as the recommended button: a caution from a registered site (a frame or a popup); a danger from any other requester, approved only after a confirmation step |
 
-Anything else is refused with a reason, and the app is told why. The passkey
-always signs the classified bytes, with the passkey `credentialId` names.
-Control, zero-width and bidirectional characters in a message are shown as
-their code points.
+Anything else is refused with a reason, and the app is told why; the person
+reads what happened in plain words, and that their passkey signed nothing.
+The passkey always signs the classified bytes, with the passkey
+`credentialId` names. Control, zero-width and bidirectional characters in a
+message are shown as labelled markers ("reversed text"), never applied, with
+a caution; their code points are listed in Details.
 
 ### Who gets the answer
 
@@ -73,14 +75,65 @@ open it on a web host (`x-safari-https:`, `googlechromes:`, `firefox:`,
 the requesting origin or a registered destination: an unregistered
 destination is never navigated to for a refusal.
 
-Every screen shows the requester: the origin (in full), or the app
-destination a result returns to (scheme, host and path, never just the
-scheme), with a "Registered" or "Not registered" badge.
+Every screen shows who is asking, from the origin and the registry only: a
+registered origin (a frame or a popup, as the browser reports it) as its
+registered name, "Verified site" and the host; any other origin as its host,
+"Not verified". On the redirect channel any page can open the portal, so
+nothing there is a verified site: a registered web destination is shown as
+the app's name, "Returns to" its host and "Registered link"; an app
+destination as "An app on this phone" with where the result returns (scheme,
+host and path, never just the scheme). Hosts are never shortened, and the
+name registered under the public suffix (Public Suffix List, private domains
+included) is set in bold. Nested frames and the page that opened a redirect
+are listed in Details; on a transaction or a change LazorKit can't show, a
+redirect opened from a site other than its destination's is a caution.
+
+### The screens
+
+Each screen leads with one short line saying what is asked, then at most one
+caution or danger, one sentence and two facts; everything else is in Details,
+closed until opened. The buttons stay on screen: "Cancel" (a labelled button;
+Escape does the same, and closes only the address sheet while it is open) and the action ("Approve with passkey", "Sign with
+passkey", "Continue with passkey", "Create passkey"). Where Cancel is
+recommended (a likely failure, a change LazorKit can't show), it is the solid
+button on the right. One line under the buttons names the passkey the device
+will ask for ("Passkey for portal.lazor.sh"); on the first approval in a
+browser, and after a passkey step that didn't finish, it says the device may
+say "Sign in" and that this is the approval. While the device's prompt is
+open the screen says so, with Cancel; a prompt that doesn't finish leads to
+"Nothing was approved" and Try again. Once the answer has gone, a popup or a
+redirect shows "Back to <app>": the popup closes, or the redirect goes to the
+same destination with the same answer again. In a frame, the SDK closes the
+dialog.
+
+A transaction preview is shown as the app's claim until requests carry what
+is signed: "Acme says" over the summary, "Preview from Acme. LazorKit can't
+yet confirm it matches what you sign." in Details, and, from a requester
+that isn't verified, a caution that LazorKit can't confirm the amount. The
+amount leads only when the preview is one plain transfer, which the fee
+payer doesn't send, with compute-budget or memo instructions at most;
+anything else is "Approve this action", and from a verified site, an
+instruction LazorKit doesn't read is a caution ("Uses a service LazorKit
+can't read."). Details lists the instructions and their programs. A
+recipient is shown as an identicon and its first and last four characters;
+tapping it shows the whole address in groups of four, with Copy. The
+network is the preview's too: Details names it as the app's ("Solana Devnet
+(from Acme's preview)"), and a preview for a network other than the one the
+app asked for is a caution. The fee line says "Paid by <app>" only for a fee
+payer registered to that app (`feePayers`); a payment to the fee payer is
+shown as a fee the user pays.
+
+Colours: one accent (indigo) for the recommended button and the focus ring;
+risk tiers that differ in lightness and carry their own icon and words; light
+and dark follow the system. Text is at least 13px, and contrast is checked by
+`test/screens.test.ts`.
 
 ### Approving
 
 Approve and sign-in act only on a real click (`isTrusted`), and only 600 ms
-after they become available (`src/security/gesture.ts`). The delay starts
+after they become available (1.5 s after the box of a danger screen's
+confirmation step is ticked; `src/security/gesture.ts`). While a button arms,
+a thin bar fills inside it. The delay starts
 again whenever what is under the pointer may have changed: the button is
 enabled (a simulation finishes, a box is ticked), the page becomes visible
 again, a popup or top-level page gains focus, or the mouse enters the frame.
@@ -93,8 +146,9 @@ and buttons) is fully on screen and not covered, faded or transformed by the
 embedding page. A frame too small to show the request at its minimum height
 keeps the buttons off.
 
-Safari and Firefox do not report this. There, a transaction also needs an
-explicit confirmation (approvals and messages without text always do), and
+Safari and Firefox do not report this. There, a transaction and a change
+LazorKit can't show from a registered site also need an explicit
+confirmation (one from a requester that isn't registered always does), and
 telemetry records `visibility: "untracked"`. Until `framing.mode` is
 `enforce`, a site that is not registered can frame the portal on those
 browsers without the portal being able to tell that it is covered.
@@ -141,7 +195,8 @@ both redirect rules at `deny`, `framing.mode` at `enforce`, and
       "name": "Acme",
       "origins": ["https://app.acme.xyz"],
       "redirects": ["acme://", "https://app.acme.xyz/callback"],
-      "programChallenges": true
+      "programChallenges": true,
+      "feePayers": ["GmaDrppBC7P5ARKV8g3djiwP89vz1jLK23V2GBjuAEGB"]
     }
   ]
 }
@@ -151,6 +206,9 @@ both redirect rules at `deny`, `framing.mode` at `enforce`, and
 - `redirects`: a scheme (`acme://`) or a URL prefix; `/callback` covers
   `/callback/done` but not `/callbackx`.
 - `programChallenges: false` refuses 32-byte challenges from that app.
+- `feePayers`: fee payer keys (base58) the app alone uses; a transaction paid
+  by one shows "Fee: Paid by Acme". A key may belong to one app only; never
+  list a shared paymaster.
 - Other fields (contact, dates, notes) are ignored by the code.
 
 ### Headers
@@ -172,7 +230,9 @@ It sets `Content-Security-Policy` (enforced) and
   styles from the portal's origin, data from the portal's origin and
   `https://api.coingecko.com` (the SOL price for the fee), images from the
   portal's origin and `data:`, and no plugins, `<base>` or form submissions.
-  The page loads nothing from another origin (system fonts only).
+  The page loads nothing from another origin: its fonts (Atkinson
+  Hyperlegible Next and Mono) are bundled and served from the portal's own
+  origin.
 
 Reports go to `/api/csp-report`. It never sets `X-Frame-Options` or
 `Cross-Origin-Opener-Policy: same-origin`; apps that open the portal in a
@@ -230,15 +290,17 @@ How released SDKs fare against this portal under the committed policy
 
 | SDK | Connect | Transactions | Wallet changes (32 bytes, no preview) | `signMessage` |
 |---|---|---|---|---|
-| web 2.0.1, 2.1.0 † | signs in; the key is reported when this portal stored it for the credential, else the SDK reads it from the chain (2.0.1 opens connect in a popup on every browser) | shown with the preview | approval screen with confirmation | refused (raw text or bytes are not a recognised format) |
-| web 3.0.0 to 3.3.0 († 3.3.0) | as above; the 32-byte connect challenge is not signed, and with the key stored there is no second prompt | shown | approval screen | refused |
-| web 3.3.1 and later | the ownership proof is signed at sign-in | shown | approval screen | shown as text |
-| mobile 1.5.x | signs in through the redirect; a key not reported is read from the chain | shown | approval screen | refused |
-| mobile 2.0.0 to 2.3.0 | signs in through the redirect | shown | approval screen | refused |
-| mobile 2.3.1 and later | signs in through the redirect | shown | approval screen | shown as text |
+| web 2.0.1, 2.1.0 † | signs in; the key is reported when this portal stored it for the credential, else the SDK reads it from the chain (2.0.1 opens connect in a popup on every browser) | shown with the preview | "a change LazorKit can't show" | refused (raw text or bytes are not a recognised format) |
+| web 3.0.0 to 3.3.0 († 3.3.0) | as above; the 32-byte connect challenge is not signed, and with the key stored there is no second prompt | shown | "a change LazorKit can't show" | refused |
+| web 3.3.1 and later | the ownership proof is signed at sign-in | shown | "a change LazorKit can't show" | shown as text |
+| mobile 1.5.x | signs in through the redirect; a key not reported is read from the chain | shown | "a change LazorKit can't show" | refused |
+| mobile 2.0.0 to 2.3.0 | signs in through the redirect | shown | "a change LazorKit can't show" | refused |
+| mobile 2.3.1 and later | signs in through the redirect | shown | "a change LazorKit can't show" | shown as text |
 
 On the redirect channel (mobile), an app scheme that is not registered is
-shown as "Not registered" in transition and refused at `enforce`. Under
+shown as "An app on this phone" in transition and refused at `enforce`; a
+registered app scheme is shown the same way, since a scheme doesn't identify
+one app. Under
 `enforce`, transactions and wallet changes are for registered apps only.
 
 ## Development
@@ -262,7 +324,9 @@ pnpm build
 the portal (the committed policy, and the enforce settings), in Chromium with a
 virtual authenticator, and a fake RPC. It covers connect, messages, a
 transaction, approvals, refusals, covered and short frames, popups, redirects,
-headers, the content policy and telemetry.
+headers, the content policy and telemetry, and the screens' own behaviour
+(the caution and danger steps, Escape, a passkey step that doesn't finish,
+the address sheet, the way back after a redirect).
 
 ```bash
 # a built @lazorkit/wallet (lazor-kit packages/react after `pnpm build`)

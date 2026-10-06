@@ -130,12 +130,18 @@ test('hello: acknowledged to its sender, only for this request id', () => {
 
 // ─── Display ────────────────────────────────────────────────────────────────
 
-test('invisible and direction-changing characters are shown as code points', () => {
-  const { segments, hidden } = revealHidden('pay \u202Eevil\u202C to\u200Bbob\r\nok 🙂 👨‍👩‍👧 ❤️');
+test('invisible and direction-changing characters are shown as labelled markers, with their code points', () => {
+  const { segments, hidden, directional } = revealHidden('pay \u202Eevil\u202C to\u200Bbob\r\nok 🙂 👨‍👩‍👧 ❤️');
   assert.equal(hidden, 4);
-  assert.deepEqual(segments.filter((s) => s.kind === 'hidden').map((s) => (s as { code: string }).code), ['U+202E', 'U+202C', 'U+200B', 'U+000D']);
+  assert.equal(directional, 2);
+  const markers = segments.filter((s) => s.kind === 'hidden');
+  assert.deepEqual(markers.map((s) => s.code), ['U+202E', 'U+202C', 'U+200B', 'U+000D']);
+  // Shown as a labelled marker in their place, never applied; named and placed for the details.
+  assert.deepEqual(markers.map((s) => s.label), ['reversed text', 'direction change', 'invisible character', 'control character']);
+  assert.deepEqual(markers.map((s) => s.name), ['right-to-left override', 'pop directional formatting', 'zero width space', 'carriage return']);
+  assert.deepEqual(markers.map((s) => s.position), [5, 10, 14, 18]);
   assert.ok(segments.some((s) => s.kind === 'text' && s.text.includes('👨‍👩‍👧 ❤️')), 'emoji sequences stay whole');
-  assert.deepEqual(revealHidden('line 1\nline\t2'), { segments: [{ kind: 'text', text: 'line 1\nline\t2' }], hidden: 0 });
+  assert.deepEqual(revealHidden('line 1\nline\t2'), { segments: [{ kind: 'text', text: 'line 1\nline\t2' }], hidden: 0, directional: 0 });
 });
 
 // ─── Config ─────────────────────────────────────────────────────────────────

@@ -17,9 +17,11 @@ export const DAPP = 'http://localhost:5174';
 /** The portal builds the run serves: the committed policy (transition), and every gate at enforce. */
 export const PORTAL_T = 'http://localhost:4173';
 export const PORTAL_E = 'http://localhost:4174';
+/** A fee payer key registered to the test dApp alone (Keypair.fromSeed of 32 bytes of 7). */
+export const DAPP_FEE_PAYER = 'GmaDrppBC7P5ARKV8g3djiwP89vz1jLK23V2GBjuAEGB';
 export const REGISTRY = {
   version: 1,
-  apps: [{ id: 'e2e-dapp', name: 'E2E dApp', origins: [DAPP], redirects: [`${DAPP}/callback`, 'e2eapp://'] }],
+  apps: [{ id: 'e2e-dapp', name: 'E2E dApp', origins: [DAPP], redirects: [`${DAPP}/callback`, 'e2eapp://'], feePayers: [DAPP_FEE_PAYER] }],
 };
 
 function enforce(policy) {

@@ -1,191 +1,220 @@
-import { Info, Loader2 } from "lucide-react"
-import { useEffect, useState } from "react"
-import { Buffer } from "buffer"
+import { useState, type ReactNode } from "react"
+import { Loader2 } from "lucide-react"
+import { AddressChip, AddressInline } from "@/components/address"
 import { ApproveButtons } from "@/components/approve-buttons"
-import { connectionFor, simulateTransaction, type SimulationResult } from "@/utils/simulation"
-import { previewBlockhash, resolveCluster, type Cluster, type ResolvedCluster } from "@/utils/cluster"
+import { AppSays, Body, CautionRow, Details, Facts, Hero, PasskeyCaption, Sentence, type Row } from "@/components/sheet"
+import type { Who } from "@/security/identity"
+import type { RegisteredApp } from "@/security/registry"
+import type { PreviewState } from "@/pages/use-preview"
+import { copyText } from "@/utils/clipboard"
+import { COMPUTE_BUDGET_PROGRAM, feeLine, MEMO_PROGRAM, MEMO_V1_PROGRAM, paymentHero, paymentWhat, SYSTEM_PROGRAM, TOKEN_2022_PROGRAM, TOKEN_PROGRAM, unreadKind } from "@/utils/preview"
 
 interface TransactionReviewProps {
   /** The transaction preview the request carried (base64). */
   preview: string
-  /** The cluster the request named, if any. */
-  requestedCluster: Cluster | null
-  requesterLabel: string
+  state: PreviewState
+  who: Who
+  /** The registered app, for a fee payer registered to it. */
+  app: RegisteredApp | undefined
+  /** Sites the request passed through (a nested frame). */
+  embeddedIn: readonly string[]
+  /** On the redirect channel, the site that opened the portal, when it isn't the destination's own. */
+  openedFrom: string | null
+  /** Where the request came from (nested frames and the like), for Details. */
+  context: readonly Row[]
   framed: boolean
-  busy: boolean
-  error: string | null
+  explain: boolean
   onApprove: () => void
   onCancel: () => void
-  /** The network the preview was simulated on, once known. */
-  onNetwork?: (network: ResolvedCluster) => void
   /** Ask for an explicit confirmation before Approve (a frame whose visibility can't be checked). */
   confirmRequired?: boolean
 }
 
-export function TransactionReview({ preview, requestedCluster, requesterLabel, framed, busy, error, onApprove, onCancel, onNetwork, confirmRequired = false }: TransactionReviewProps) {
-  const [loading, setLoading] = useState(true)
-  const [confirmed, setConfirmed] = useState(false)
-  const [simulation, setSimulation] = useState<SimulationResult | null>(null)
-  const [network, setNetwork] = useState<ResolvedCluster | null>(null)
+const PROGRAM_NAMES: Record<string, string> = {
+  [SYSTEM_PROGRAM]: "System Program",
+  [TOKEN_PROGRAM]: "Token Program",
+  [TOKEN_2022_PROGRAM]: "Token-2022 Program",
+  [COMPUTE_BUDGET_PROGRAM]: "Compute Budget Program",
+  [MEMO_PROGRAM]: "Memo Program",
+  [MEMO_V1_PROGRAM]: "Memo Program (v1)",
+}
 
-  useEffect(() => {
-    let cancelled = false
-    const run = async () => {
-      setLoading(true)
-      try {
-        const blockhash = previewBlockhash(new Uint8Array(Buffer.from(preview, "base64")))
-        const resolved = await resolveCluster(requestedCluster, blockhash, async (cluster, hash) =>
-          (await connectionFor(cluster).isBlockhashValid(hash, { commitment: "processed" })).value,
-        )
-        if (cancelled) return
-        setNetwork(resolved)
-        onNetwork?.(resolved)
-        const result = await simulateTransaction(preview, resolved.cluster)
-        if (!cancelled) setSimulation(result)
-      } catch (e) {
-        if (!cancelled) {
-          setSimulation({
-            appName: "Application",
-            balanceChanges: [],
-            network: "Unknown",
-            networkFee: "Unknown",
-            networkFeeUSD: "Unknown",
-            autoConfirm: "Off",
-            chainId: "unknown",
-            error: `This transaction could not be simulated: ${(e as Error).message}`,
-            unavailable: true,
-          })
-        }
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-    void run()
-    return () => {
-      cancelled = true
-    }
-    // onNetwork is a reporting callback; the simulation depends on the request only.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preview, requestedCluster])
+/**
+ * A transaction with a preview. Until requests carry the signed preimage, the
+ * preview is the app's claim: the hero says "<App> says", Details opens with
+ * that, and there is no compare line. The hero names an amount only for a
+ * preview that is one plain transfer; anything LazorKit didn't read is a
+ * caution. From a requester that isn't verified, money moving is a caution.
+ * The network is the preview's too, so it is named in Details only, as the
+ * app's; a network other than the one the app asked for is a caution.
+ */
+export function TransactionReview({ preview, state, who, app, embeddedIn, openedFrom, context, framed, explain, onApprove, onCancel, confirmRequired = false }: TransactionReviewProps) {
+  const [confirmed, setConfirmed] = useState(false)
+  const [copied, setCopied] = useState<string | null>(null)
+  const { loading, simulation, network, decoded, summary } = state
+  const payment = summary?.payment ?? null
 
   // A failed simulation is a likely failure only on a network that is known;
   // on a guessed one it says nothing about the transaction.
   const simulationFailed = !!simulation?.error && !simulation.unavailable
   const failed = simulationFailed && network?.known === true
   const unconfirmed = simulationFailed && !failed
-  const changes = simulation?.balanceChanges ?? []
-  // First and last when there are more than two.
-  const displayChanges = changes.length > 2 ? [changes[0], changes[changes.length - 1]] : changes
+  const fee = summary ? feeLine({ feePayer: decoded?.feePayer ?? null, fees: summary.fees, app }) : null
+
+  // What LazorKit didn't read: a whole preview it can't decode, a program, or a step of one it knows.
+  const unread = decoded ? unreadKind(decoded) : "preview"
+
+  // At most one caution, the most decisive first.
+  let caution: string | null = null
+  if (!loading) {
+    const what = payment ? "this amount" : "what this does"
+    if (failed) caution = "This will probably fail. Nothing leaves your account if it does."
+    else if (network?.mismatch) {
+      caution =
+        network.cluster === "mainnet"
+          ? `This uses real money, but ${who.name} asked for test mode.`
+          : `This preview is for a test network, but ${who.name} asked for real money.`
+    } else if (embeddedIn.length > 0) caution = `This request passed through another site: ${embeddedIn[0]}.`
+    else if (openedFrom) caution = `This request was opened from another site: ${openedFrom}.`
+    else if (!who.verified) {
+      if (who.kind === "site" && who.destination) caution = `LazorKit can't tell which site sent this, or confirm ${what}.`
+      else if (who.kind === "site" && who.host) caution = `${who.host} isn't verified, and LazorKit can't confirm ${what}.`
+      else caution = `This app isn't verified, and LazorKit can't confirm ${what}.`
+    } else if (unread === "service") caution = "Uses a service LazorKit can't read."
+    else if (unread === "step") caution = "Includes a step LazorKit can't read."
+    else if (unread === "preview") caution = "LazorKit can't read what this does."
+  }
+
+  const facts: Row[] = fee?.where === "first-view" ? [{ label: "Fee", value: fee.text, testId: "fee" }] : []
+
+  const rows: Row[] = []
+  if (payment) {
+    rows.push({ label: "To", value: <AddressInline address={payment.to} /> })
+    rows.push({ label: "Amount", value: paymentWhat(payment) })
+  }
+  if (fee?.where === "details") rows.push({ label: "Fee", value: fee.text, testId: "fee" })
+  if (payment) rows.push({ label: "Undo", value: "Not possible. Payments are final." })
+  if (simulation?.unavailable) rows.push({ label: "Estimate", value: "LazorKit couldn't get an estimate for this." })
+  else if (unconfirmed) rows.push({ label: "Estimate", value: "LazorKit couldn't confirm which network this is for, so it couldn't check it." })
+  else if (failed) rows.push({ label: "Estimate", value: "The estimate failed, so this will probably fail too." })
+  else if (simulation && simulation.balanceChanges.length) {
+    rows.push({
+      label: "Balance changes (estimate)",
+      value: (
+        <ul className="space-y-0.5">
+          {simulation.balanceChanges.slice(0, 6).map((change, i) => (
+            <li key={i} className="flex flex-wrap items-center gap-x-2">
+              <AddressInline address={change.account} />
+              <span>
+                ≈ {change.amount} {change.token}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ),
+    })
+  }
+  rows.push(...context)
+
+  const networkName = network ? (network.cluster === "mainnet" ? "Solana Mainnet" : "Solana Devnet") : "Unknown"
+  // Where the network comes from: the preview's blockhash, or the app's word.
+  const networkSource = !network
+    ? ""
+    : network.verified
+      ? ` (from ${who.name}'s preview)`
+      : network.source === "request"
+        ? ` (as ${who.name} asked; not confirmed)`
+        : " (not confirmed)"
+  const experts: Row[] = [
+    {
+      label: "Network",
+      value: (
+        <span data-testid="network" data-cluster={network?.cluster} data-verified={network?.verified ? "true" : "false"} data-known={network?.known ? "true" : "false"}>
+          {networkName}
+          {networkSource}
+          {network?.mismatch ? `. The app asked for ${network.cluster === "mainnet" ? "devnet" : "mainnet"}, but this transaction is for ${network.cluster}.` : ""}
+        </span>
+      ),
+    },
+  ]
+  if (decoded?.feePayer) experts.push({ label: "Fee payer", value: <AddressInline address={decoded.feePayer} /> })
+  if (payment?.toIsOwner) experts.push({ label: "Receiving token account", value: "Owned by the address above" })
+  if (payment?.mint) experts.push({ label: "Token", value: <AddressInline address={payment.mint} /> })
+  if (decoded) {
+    const notRead = decoded.unread.length ? `, ${decoded.unread.length} LazorKit didn't read` : ""
+    experts.push({ label: "Instructions", value: <span data-testid="instructions">{`${decoded.instructions}${notRead}`}</span> })
+  }
+  if (decoded?.programs.length) experts.push({ label: "Programs", value: decoded.programs.map((p) => PROGRAM_NAMES[p] ?? `${p.slice(0, 4)}…${p.slice(-4)}`).join(" · ") })
+  if (simulation?.error) experts.push({ label: "Simulation", value: simulation.error })
+
+  let hero: ReactNode
+  if (loading) {
+    hero = (
+      <span className="flex items-center gap-2 text-ink-2" data-testid="checking">
+        <Loader2 className="h-6 w-6 animate-spin" aria-hidden="true" />
+        Checking…
+      </span>
+    )
+  } else if (payment) {
+    hero = paymentHero(payment)
+  } else {
+    hero = "Approve this action"
+  }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3" data-testid="transaction-review">
-      <div className="min-h-[7.5rem] flex-1 space-y-3 overflow-y-auto" data-testid="review-content">
-        <h1 className="text-base font-bold text-foreground">Review transaction</h1>
-
-        <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-2.5 flex items-start gap-2">
-          <Info className="w-3.5 h-3.5 text-blue-400 flex-shrink-0 mt-0.5" />
-          <p className="text-[11px] text-blue-300/90 leading-tight" data-testid="preview-source">
-            Preview supplied by {requesterLabel}. Amounts are estimates; approve only if you trust this site.
-          </p>
-        </div>
-
-        {loading ? (
-          <div className="flex flex-col items-center justify-center py-8">
-            <Loader2 className="w-6 h-6 animate-spin text-primary mb-2" />
-            <p className="text-xs text-muted-foreground">Simulating transaction…</p>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground pl-1">What will happen</p>
-
-            {simulation?.error && (
-              <div
-                role="alert"
-                data-testid={failed ? "simulation-failed" : unconfirmed ? "simulation-unconfirmed" : "simulation-unavailable"}
-                className={`${failed ? "bg-red-500/10 border-red-500/30 text-red-500" : "bg-yellow-500/10 border-yellow-500/30 text-yellow-500"} border rounded-xl p-3 flex flex-col items-center justify-center text-center gap-1`}
-              >
-                <Info className="w-4 h-4" />
-                {unconfirmed ? (
-                  <>
-                    <p className="text-xs font-medium">This preview could not be checked: the network this transaction is for could not be confirmed.</p>
-                    <p className="text-[10px] opacity-80">{simulation.error}</p>
-                  </>
-                ) : (
-                  <p className="text-xs font-medium">{simulation.error}</p>
-                )}
-                {failed && <p className="text-[10px] opacity-80">This transaction is likely to fail. Approve only if you know why.</p>}
-              </div>
-            )}
-
-            {simulation && !simulation.error && (
-              <div className="bg-muted/40 border border-border/60 rounded-xl overflow-hidden">
-                {displayChanges.length === 0 && <div className="p-3 text-center text-xs text-muted-foreground">No balance changes detected.</div>}
-                {displayChanges.map((change, index) => {
-                  const isAction = change.token.startsWith("Sent to")
-                  return (
-                    <div key={index} className={`flex items-center justify-between p-3 ${index !== displayChanges.length - 1 ? "border-b border-border/40" : ""}`}>
-                      <span className={`text-xs ${isAction ? "font-medium text-foreground" : "text-muted-foreground"}`}>{change.token}</span>
-                      <span className={`text-sm font-semibold ${change.color} tracking-tight`}>{change.amount}</span>
-                    </div>
-                  )
-                })}
-                {changes.length > 2 && (
-                  <div className="p-1.5 text-center bg-muted/20 border-t border-border/40">
-                    <p className="text-[10px] text-muted-foreground italic">+ {changes.length - 2} intermediate changes hidden</p>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {simulation && (
-              <div className="bg-muted/20 border border-border/40 rounded-xl p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">Network</span>
-                  <div className="flex items-center gap-1.5" data-testid="network" data-cluster={network?.cluster} data-verified={network?.verified ? "true" : "false"} data-known={network?.known ? "true" : "false"}>
-                    {network && !network.verified && <span className="text-[10px] font-medium text-yellow-500">Unverified</span>}
-                    <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full border ${network?.verified ? "bg-green-500/10 border-green-500/20" : "bg-yellow-500/10 border-yellow-500/20"}`}>
-                      <span className={`w-1.5 h-1.5 rounded-full ${network?.verified ? "bg-green-500" : "bg-yellow-500"}`}></span>
-                      <span className={`text-[10px] font-medium ${network?.verified ? "text-green-600" : "text-yellow-500"}`}>
-                        {network ? (network.cluster === "mainnet" ? "Solana Mainnet" : "Solana Devnet") : simulation.network}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-                {network?.mismatch && (
-                  <p className="text-[10px] text-yellow-500 leading-tight">
-                    The app asked for {network.cluster === "mainnet" ? "devnet" : "mainnet"}, but this transaction is for {network.cluster}.
-                  </p>
-                )}
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">Network Fee</span>
-                  <div className="text-right flex flex-col items-end">
-                    <span className="text-xs font-medium text-foreground">{simulation.networkFee}</span>
-                    <span className="text-[10px] text-muted-foreground bg-muted px-1 rounded text-center min-w-[40px]">{simulation.networkFeeUSD}</span>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
+    <div
+      className="flex min-h-0 flex-1 flex-col"
+      data-testid="transaction-review"
+      data-cluster={network?.cluster}
+      data-loading={loading ? "true" : "false"}
+    >
+      <Body>
+        <Hero eyebrow={<AppSays name={who.name} testId="preview-source" />} size={payment ? "amount" : "action"}>
+          {hero}
+        </Hero>
+        {payment && <AddressChip address={payment.to} prefix="to" testId="recipient" />}
+        {caution && <CautionRow testId={failed ? "simulation-failed" : "caution"}>{caution}</CautionRow>}
+        {!loading && !failed && <Sentence>{payment ? "Payments can't be undone." : "Approved actions can't be undone."}</Sentence>}
+        <Facts rows={facts} />
         {confirmRequired && !loading && (
-          <label className="flex items-start gap-2 text-xs text-foreground">
-            <input type="checkbox" className="mt-0.5" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} data-testid="confirm" />
-            I started this transaction on {requesterLabel}.
+          <label className="flex min-h-12 cursor-pointer items-start gap-3 rounded-xl border border-line p-3 text-[16px] leading-[24px] text-ink">
+            <input type="checkbox" className="mt-0.5 h-6 w-6 shrink-0 accent-[var(--accent)]" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} data-testid="confirm" />
+            I started this on {who.name}.
           </label>
         )}
-
-        {error && <p className="text-xs text-red-500" role="alert">{error}</p>}
-      </div>
+        <Details
+          lead={
+            <p className="py-2 text-[14px] leading-[20px] text-ink-2" data-testid="preview-notice">
+              Preview from {who.name}. LazorKit can't yet confirm it matches what you sign.
+            </p>
+          }
+          rows={rows}
+          experts={experts}
+        >
+          <div className="pt-1">
+            <button
+              type="button"
+              className="min-h-11 text-[14px] text-ink underline underline-offset-4"
+              onClick={async () => setCopied((await copyText(preview)) ? "Transaction copied" : "Couldn't copy the transaction.")}
+              data-testid="copy-transaction"
+            >
+              Copy transaction
+            </button>
+            <span role="status" className="ml-2 text-[14px] text-ink-2">
+              {copied}
+            </span>
+          </div>
+        </Details>
+      </Body>
 
       <ApproveButtons
         framed={framed}
-        busy={busy}
         disabled={loading || (confirmRequired && !confirmed)}
-        discourage={failed}
-        approveLabel={failed ? "Approve anyway" : "Approve"}
+        recommendCancel={failed}
+        approveLabel={loading ? "Checking…" : failed ? "Approve anyway" : "Approve with passkey"}
         onApprove={onApprove}
         onCancel={onCancel}
+        caption={<PasskeyCaption explain={explain} />}
       />
     </div>
   )
