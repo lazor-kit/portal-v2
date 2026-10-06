@@ -98,6 +98,22 @@ export function AddressSheet({ address, onClose }: { address: string; onClose: (
     return () => (back.current as HTMLElement | null)?.focus?.()
   }, [])
 
+  // While the sheet is open, Escape closes it and nothing else, wherever
+  // focus is (the page's own Escape cancels the whole request). Captured at
+  // the document, before any other listener sees it.
+  const close = useRef(onClose)
+  close.current = onClose
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return
+      event.stopImmediatePropagation()
+      event.preventDefault()
+      close.current()
+    }
+    document.addEventListener("keydown", onKey, true)
+    return () => document.removeEventListener("keydown", onKey, true)
+  }, [])
+
   const copy = async () => setCopied((await copyText(address)) ? "yes" : "no")
 
   return (
@@ -106,13 +122,12 @@ export function AddressSheet({ address, onClose }: { address: string; onClose: (
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="w-full max-w-sm space-y-3 rounded-2xl bg-surface p-5 text-ink shadow-xl"
+        // Focusable, so a click or a selection inside keeps focus in the sheet.
+        tabIndex={-1}
+        className="w-full max-w-sm space-y-3 rounded-2xl bg-surface p-5 text-ink shadow-xl outline-none"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
-          if (e.key === "Escape") {
-            e.stopPropagation()
-            onClose()
-          } else if (e.key === "Tab") {
+          if (e.key === "Tab") {
             // Keep focus inside the sheet: its two buttons.
             const buttons = [...e.currentTarget.querySelectorAll("button")]
             const at = buttons.indexOf(document.activeElement as HTMLButtonElement)

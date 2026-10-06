@@ -1,5 +1,5 @@
 import { useId, useState } from "react"
-import { Globe, Smartphone } from "lucide-react"
+import { Globe, Link2, Smartphone } from "lucide-react"
 import { hostParts } from "@/security/domain"
 import { badgeExplainer, type Who } from "@/security/identity"
 
@@ -45,8 +45,10 @@ export function Host({ host, insecure = false }: { host: string; insecure?: bool
 
 /**
  * Who is asking, on every screen: the registered name with "Verified site",
- * or the host itself with "Not verified"; an app destination as "An app on
- * this phone". Tapping the badge says what it means, and what it doesn't.
+ * or the host itself with "Not verified"; on the redirect channel, where the
+ * answer returns to ("Registered link" for a registered web destination); an
+ * app destination as "An app on this phone". Tapping the badge says what it
+ * means, and what it doesn't.
  */
 export function AppIdentity({ view, who, hidden = false }: { view: RequesterView; who: Who; hidden?: boolean }) {
   const [open, setOpen] = useState(false)
@@ -54,7 +56,9 @@ export function AppIdentity({ view, who, hidden = false }: { view: RequesterView
   const common = { "data-testid": "requester", "data-evidence": view.evidence, "data-channel": view.channel, "data-origin": who.origin ?? who.returnsTo ?? "" }
   if (hidden || who.kind === "unknown") return <div {...common} className="sr-only" />
 
-  const letter = (who.kind === "site" ? (who.verified ? who.title : who.host ?? "?") : "a").replace(/^www\./, "").charAt(0).toUpperCase()
+  // A registered web destination on the redirect channel: named, but never "Verified site".
+  const registeredLink = who.kind === "site" && who.destination && who.registeredAs !== null
+  const letter = (who.kind === "site" ? (who.verified || registeredLink ? who.title : who.host ?? "?") : "a").replace(/^www\./, "").charAt(0).toUpperCase()
   const badge =
     who.kind === "site" ? (
       <button
@@ -65,11 +69,17 @@ export function AppIdentity({ view, who, hidden = false }: { view: RequesterView
         onClick={() => setOpen((v) => !v)}
         data-testid="requester-badge"
         data-verified={who.verified ? "true" : "false"}
+        data-registered={who.verified || registeredLink ? "true" : "false"}
       >
         {who.verified ? (
           <span className="inline-flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[13px] leading-[18px] text-ink">
             <Globe className="h-3.5 w-3.5" aria-hidden="true" />
             Verified site
+          </span>
+        ) : registeredLink ? (
+          <span className="inline-flex items-center gap-1 rounded-full bg-ground px-2 py-0.5 text-[13px] leading-[18px] text-ink-2">
+            <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
+            Registered link
           </span>
         ) : (
           <span className="rounded-full bg-ground px-2 py-0.5 text-[13px] leading-[18px] text-ink-2">Not verified</span>
@@ -89,6 +99,16 @@ export function AppIdentity({ view, who, hidden = false }: { view: RequesterView
               <p className="text-[17px] leading-[24px] font-bold text-ink" data-testid="requester-name">{who.title}</p>
               <p className="font-mono text-[13px] leading-[20px] text-ink-2" data-testid="requester-origin">
                 <Host host={who.host} insecure={who.insecure} />
+              </p>
+            </>
+          ) : registeredLink && who.host ? (
+            <>
+              <p className="text-[17px] leading-[24px] font-bold text-ink" data-testid="requester-name">{who.title}</p>
+              <p className="text-[13px] leading-[20px] text-ink-2">
+                Returns to{" "}
+                <span className="font-mono" data-testid="requester-origin">
+                  <Host host={who.host} insecure={who.insecure} />
+                </span>
               </p>
             </>
           ) : who.kind === "site" && who.host ? (

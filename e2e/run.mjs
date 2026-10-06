@@ -331,9 +331,11 @@ await scenario('transaction: preview simulated through /api/rpc on the network i
   const cluster = await frame.getAttribute('[data-testid=network]', 'data-cluster');
   check(cluster === 'devnet', `simulated on ${cluster}: the blockhash is valid on devnet only`);
   check((await frame.textContent('[data-testid=transaction-review]')).includes('The app asked for mainnet'), 'mismatch noted');
+  check((await frame.textContent('[data-testid=caution]')).includes('This preview is for a test network, but E2E dApp asked for real money.'), 'the mismatch is a caution on the first view');
+  check((await frame.textContent('[data-testid=network]')).includes("Solana Devnet (from E2E dApp's preview)"), "the network is named as the app's, in Details");
   check((await frame.textContent('[data-testid=hero]')) === 'Send 0.001 SOL', 'hero from the preview');
   check((await frame.getAttribute('[data-testid=recipient]', 'data-address')) === to, 'recipient chip holds the whole address');
-  check(await frame.$('[data-testid=test-chip]'), 'a devnet blockhash: not real money');
+  check(!(await frame.textContent('[data-testid=transaction-review]')).includes('Not real money'), "no test-mode claim in LazorKit's voice");
   check(!(await frame.$('[data-testid=match-line]')), 'no compare line on an app preview');
   check((await frame.textContent('[data-testid=preview-notice]')).includes("Preview from E2E dApp. LazorKit can't yet confirm it matches what you sign."), 'Details says whose preview it is');
   check((await frame.textContent('[data-testid=fee]')) .includes('Paid by E2E dApp'), 'a fee payer registered to the app');
@@ -347,6 +349,15 @@ await scenario('transaction: preview simulated through /api/rpc on the network i
   await frame.press('[data-testid=address-done]', 'Escape');
   await frame.waitForSelector('[data-testid=address-sheet]', { state: 'detached' });
   check(await frame.$('[data-testid=transaction-review]'), 'still on the request');
+  // A click inside the sheet keeps focus there; with focus nowhere, Escape still closes the sheet only.
+  await frame.click('[data-testid=recipient]');
+  await frame.click('[data-testid=full-address]');
+  check(await frame.evaluate(() => !!document.activeElement?.closest('[data-testid=address-sheet]')), 'focus stays in the sheet after a click inside it');
+  await frame.evaluate(() => document.activeElement?.blur());
+  await A.page.keyboard.press('Escape');
+  await frame.waitForSelector('[data-testid=address-sheet]', { state: 'detached' });
+  await sleep(300);
+  check(await frame.$('[data-testid=transaction-review]'), 'still on the request after Escape with focus outside the sheet');
   await shot(A.page, 'transaction');
   await press(frame, '[data-testid=approve]');
   const result = await pending;
@@ -553,7 +564,7 @@ await scenario('layout: a frame too small for the request keeps Approve off when
   check(reply.data?.type === 'error', JSON.stringify(reply));
 });
 
-await scenario('gesture: without visibility tracking (Safari, Firefox) a transaction needs an explicit confirmation; telemetry says so', async () => {
+await scenario('gesture: without visibility tracking (Safari, Firefox) a transaction and a change LazorKit can\'t show need an explicit confirmation; telemetry says so', async () => {
   const U = await newPage({
     url: `${DAPP}/`,
     // The portal frame on a browser without IntersectionObserver v2.
@@ -575,6 +586,18 @@ await scenario('gesture: without visibility tracking (Safari, Firefox) a transac
     await press(frame, '[data-testid=approve]');
     const result = await pending;
     check(result.ok, JSON.stringify(result));
+    // The change LazorKit can't show, from the verified site: the same tick box.
+    await idle(U.page);
+    const approval = U.page.evaluate(([ch, c]) => window.lk.sign(ch, '', c), [b64url(randomBytes(32)), credentialId]);
+    const legacy = await portalFrame(U.page);
+    check((await legacy.getAttribute('[data-testid=approval-review]', 'data-tier')) === 'caution', 'caution tier');
+    await legacy.waitForSelector('[data-testid=confirm]');
+    await sleep(800);
+    check(await legacy.isDisabled('[data-testid=approve]'), 'Approve anyway off until confirmed');
+    await legacy.check('[data-testid=confirm]');
+    await press(legacy, '[data-testid=approve]');
+    const approved = await approval;
+    check(approved.ok, JSON.stringify(approved));
     await sleep(500);
     const events = logs.slice(before).filter((l) => l.route === 'telemetry');
     check(events.length > 0 && events.every((e) => e.visibility === 'untracked'), JSON.stringify(events.map((e) => e.visibility)));
@@ -759,7 +782,10 @@ await scenario('redirect: signs and returns to the registered https callback wit
   const text = 'mobile sign';
   const T = await topLevel(`action=sign&message=${b64url(messageChallenge(Buffer.from(text)))}&displayMessage=${encodeURIComponent(text)}&credentialId=${cred()}&redirect_url=${encodeURIComponent(`${DAPP}/callback?state=xyz`)}`);
   try {
-    check((await T.page.textContent('[data-testid=requester-badge]')).includes('Verified site'), 'registered destination');
+    // Any page can open the portal with this destination: where the answer returns, never "Verified site".
+    check((await T.page.textContent('[data-testid=requester-badge]')).includes('Registered link'), 'registered destination');
+    check((await T.page.getAttribute('[data-testid=requester-badge]', 'data-verified')) === 'false', 'not verified');
+    check((await T.page.textContent('[data-testid=requester]')).includes('Returns to http://localhost:5174'), 'returns to the destination');
     await press(T.page, '[data-testid=approve]');
     await T.page.waitForURL(/\/callback\?/);
     const q = new URL(T.page.url()).searchParams;
@@ -767,6 +793,26 @@ await scenario('redirect: signs and returns to the registered https callback wit
     await verifyAssertion(T, { credentialId: q.get('credentialId'), signature: q.get('signature'), clientDataJson: q.get('clientDataJSONReturn'), authenticatorData: q.get('authenticatorDataReturn') }, messageChallenge(Buffer.from(text)));
     check(q.get('msg'), 'msg present');
     return { fields: [...q.keys()] };
+  } finally {
+    await T.context.close();
+  }
+});
+
+await scenario('redirect: a registered destination opened from another site: the change LazorKit can\'t show is a danger, with that site as a caution', async () => {
+  const T = await newPage({ url: `${DAPP_B}/` });
+  try {
+    const { credentials } = await A.cdp.send('WebAuthn.getCredentials', { authenticatorId: A.authenticatorId });
+    await T.cdp.send('WebAuthn.addCredential', { authenticatorId: T.authenticatorId, credential: credentials[0] });
+    const query = `action=sign&message=${b64url(randomBytes(32))}&credentialId=${cred()}&redirect_url=${encodeURIComponent(`${DAPP}/callback?state=x`)}`;
+    await T.page.evaluate((url) => {
+      location.href = url;
+    }, `${PORTAL_T}/?${query}`);
+    await T.page.waitForSelector('[data-testid=approval-review]');
+    check((await T.page.getAttribute('[data-testid=requester]', 'data-channel')) === 'redirect', 'redirect channel');
+    check((await T.page.textContent('[data-testid=requester-badge]')).includes('Registered link'), 'the destination is registered');
+    check((await T.page.getAttribute('[data-testid=approval-review]', 'data-tier')) === 'danger', 'danger: a registered destination is not a verified requester');
+    check((await T.page.textContent('[data-testid=caution]')).includes('This request was opened from another site: 127.0.0.1:5175.'), 'the opening site, as a caution');
+    await shot(T.page, 'redirect-opened-elsewhere');
   } finally {
     await T.context.close();
   }
@@ -784,14 +830,27 @@ await scenario('redirect: an unregistered https destination is refused and not n
   }
 });
 
-await scenario('redirect: an unregistered app scheme is shown as an app on this phone in transition, refused in enforce', async () => {
+await scenario('redirect: an unregistered app scheme is shown as an app on this phone in transition, with a way back after approving; refused in enforce', async () => {
   const query = `action=sign&message=${b64url(messageChallenge(Buffer.from('x')))}&displayMessage=x&credentialId=${cred()}&redirect_url=${encodeURIComponent('newapp://cb')}`;
   const T = await topLevel(query);
+  let detail = null;
   try {
     check((await T.page.textContent('[data-testid=requester-origin]')) === 'newapp://cb', 'the destination shown in full');
     check((await T.page.textContent('[data-testid=requester-name]')) === 'An app on this phone', 'an app, never a verified one');
     check(!(await T.page.$('[data-testid=requester-badge]')), 'no badge for an app scheme');
     await T.page.waitForSelector('[data-testid=message-review]');
+    // Approved: the answer goes to the app, and "Back to the app" sends the same answer there again.
+    const attempts = [];
+    await T.page.exposeFunction('e2eNavigate', (url) => attempts.push(url));
+    await T.page.evaluate(() => navigation.addEventListener('navigate', (e) => window.e2eNavigate(e.destination.url)));
+    await press(T.page, '[data-testid=approve]');
+    await T.page.waitForSelector('[data-testid=back-to-app]');
+    check((await T.page.textContent('[data-testid=back-to-app]')) === 'Back to the app', 'a way back');
+    await T.page.click('[data-testid=back-to-app]');
+    await sleep(500);
+    check(T.page.url().startsWith(PORTAL_T), 'still on the portal');
+    check(attempts.length === 2 && attempts[0].startsWith('newapp://cb?') && attempts[1] === attempts[0], `the same answer, to the same app: ${attempts.map((u) => u.split('?')[0]).join(', ')}`);
+    detail = { navigations: attempts.map((u) => u.split('?')[0]) };
   } finally {
     await T.context.close();
   }
@@ -801,6 +860,7 @@ await scenario('redirect: an unregistered app scheme is shown as an app on this 
   } finally {
     await E.context.close();
   }
+  return detail;
 });
 
 await scenario('redirect: a browser hand-off scheme is refused in transition too, and Close goes nowhere', async () => {

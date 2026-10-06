@@ -14,7 +14,21 @@ type ApprovalReviewProps = {
   explain: boolean
   onApprove: () => void
   onCancel: () => void
-} & ({ kind: "approval"; fingerprint: string; verified: boolean } | { kind: "ownership" })
+} & (
+  | {
+      kind: "approval"
+      fingerprint: string
+      verified: boolean
+      /**
+       * Another site opened the request (the redirect channel): a caution on
+       * the danger screen. A verified requester (a frame or a popup) never has one.
+       */
+      caution?: string | null
+      /** Ask for an explicit confirmation before Approve (a frame whose visibility can't be checked). */
+      confirmRequired?: boolean
+    }
+  | { kind: "ownership" }
+)
 
 export const LEGACY_TITLE = "Approve a change LazorKit can't show"
 const LEGACY_RISK = "It could do anything, up to full control of your account."
@@ -23,7 +37,8 @@ const ACK = "I understand this could give away control of my account."
 /**
  * A wallet change the app prepared, which LazorKit can't read yet (session,
  * key and similar requests from current SDKs): Cancel is the recommended
- * button. From a verified site it is a caution; from any other requester a
+ * button. From a verified site it is a caution, with a box to tick in a
+ * frame whose visibility can't be checked; from any other requester a
  * danger, and approving takes a confirmation step with a box to tick.
  *
  * Or a proof that the user holds this passkey, which approves nothing.
@@ -66,17 +81,31 @@ export function ApprovalReview(props: ApprovalReviewProps) {
   )
 
   if (props.verified) {
+    const confirmRequired = props.confirmRequired ?? false
     return (
       <div className="flex min-h-0 flex-1 flex-col" data-testid="approval-review" data-kind="approval" data-tier="caution">
         <Body>
           <Hero>{LEGACY_TITLE}</Hero>
           <CautionRow>{LEGACY_RISK}</CautionRow>
           <Sentence>If you're not sure, cancel. Nothing happens.</Sentence>
+          {confirmRequired && (
+            <label className="flex min-h-12 cursor-pointer items-start gap-3 rounded-xl border border-line p-3 text-[16px] leading-[24px] text-ink">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-6 w-6 shrink-0 accent-[var(--accent)]"
+                checked={confirmed}
+                onChange={(e) => setConfirmed(e.target.checked)}
+                data-testid="confirm"
+              />
+              I started this on {props.name}.
+            </label>
+          )}
           {details}
         </Body>
         <ApproveButtons
           framed={props.framed}
           recommendCancel
+          disabled={confirmRequired && !confirmed}
           approveLabel="Approve anyway"
           onApprove={props.onApprove}
           onCancel={props.onCancel}
@@ -91,6 +120,7 @@ export function ApprovalReview(props: ApprovalReviewProps) {
     <div className="flex min-h-0 flex-1 flex-col" data-testid="approval-review" data-kind="approval" data-tier="danger">
       <Body>
         <DangerBlock title={LEGACY_TITLE}>{LEGACY_RISK}</DangerBlock>
+        {props.caution && <CautionRow>{props.caution}</CautionRow>}
         {ack && (
           <label className="flex min-h-12 cursor-pointer items-start gap-3 rounded-xl border border-line p-3 text-[16px] leading-[24px] text-ink" data-testid="ack-step">
             <input

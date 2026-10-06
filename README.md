@@ -32,8 +32,8 @@ The portal signs only these challenge formats (`src/security/challenge.ts`):
 |---|---|---|
 | Message | 58: `"LazorKit signed message v1"` ‖ SHA-256(tag ‖ UTF-8 text) | the text, only when it recomputes to the challenge, with "Matches what your passkey signs" in Details; without text, "Sign data" with a caution and the fingerprint in Details |
 | Ownership proof | 59: `"LazorKit ownership proof v1"` ‖ 32 random bytes | "One more step"; signed during sign-in on connect |
-| Transaction | 32, with a preview | the simulated preview, as the requesting app's claim ("Acme says"): "Send 0.25 SOL" and the recipient when it is one plain transfer |
-| Approval | 32, no preview | "Approve a change LazorKit can't show", with Cancel as the recommended button: a caution from a registered site; a danger from any other requester, approved only after a confirmation step |
+| Transaction | 32, with a preview | the simulated preview, as the requesting app's claim ("Acme says"): "Send 0.25 SOL" and the recipient when it is one plain transfer (compute-budget and memo instructions aside), otherwise "Approve this action"; anything LazorKit doesn't read is a caution |
+| Approval | 32, no preview | "Approve a change LazorKit can't show", with Cancel as the recommended button: a caution from a registered site (a frame or a popup); a danger from any other requester, approved only after a confirmation step |
 
 Anything else is refused with a reason, and the app is told why; the person
 reads what happened in plain words, and that their passkey signed nothing.
@@ -76,20 +76,24 @@ the requesting origin or a registered destination: an unregistered
 destination is never navigated to for a refusal.
 
 Every screen shows who is asking, from the origin and the registry only: a
-registered origin as its registered name, "Verified site" and the host; any
-other origin as its host, "Not verified"; an app destination as "An app on
-this phone" with where the result returns (scheme, host and path, never just
-the scheme), never verified. Hosts are never shortened, and the name
-registered under the public suffix (Public Suffix List, private domains
+registered origin (a frame or a popup, as the browser reports it) as its
+registered name, "Verified site" and the host; any other origin as its host,
+"Not verified". On the redirect channel any page can open the portal, so
+nothing there is a verified site: a registered web destination is shown as
+the app's name, "Returns to" its host and "Registered link"; an app
+destination as "An app on this phone" with where the result returns (scheme,
+host and path, never just the scheme). Hosts are never shortened, and the
+name registered under the public suffix (Public Suffix List, private domains
 included) is set in bold. Nested frames and the page that opened a redirect
-are listed in Details.
+are listed in Details; on a transaction or a change LazorKit can't show, a
+redirect opened from a site other than its destination's is a caution.
 
 ### The screens
 
 Each screen leads with one short line saying what is asked, then at most one
 caution or danger, one sentence and two facts; everything else is in Details,
 closed until opened. The buttons stay on screen: "Cancel" (a labelled button;
-Escape does the same) and the action ("Approve with passkey", "Sign with
+Escape does the same, and closes only the address sheet while it is open) and the action ("Approve with passkey", "Sign with
 passkey", "Continue with passkey", "Create passkey"). Where Cancel is
 recommended (a likely failure, a change LazorKit can't show), it is the solid
 button on the right. One line under the buttons names the passkey the device
@@ -97,17 +101,27 @@ will ask for ("Passkey for portal.lazor.sh"); on the first approval in a
 browser, and after a passkey step that didn't finish, it says the device may
 say "Sign in" and that this is the approval. While the device's prompt is
 open the screen says so, with Cancel; a prompt that doesn't finish leads to
-"Nothing was approved" and Try again.
+"Nothing was approved" and Try again. Once the answer has gone, a popup or a
+redirect shows "Back to <app>": the popup closes, or the redirect goes to the
+same destination with the same answer again. In a frame, the SDK closes the
+dialog.
 
 A transaction preview is shown as the app's claim until requests carry what
 is signed: "Acme says" over the summary, "Preview from Acme. LazorKit can't
-yet confirm it matches what you sign." in Details, and, from a site
-that isn't registered, a caution that LazorKit can't confirm the amount. A
+yet confirm it matches what you sign." in Details, and, from a requester
+that isn't verified, a caution that LazorKit can't confirm the amount. The
+amount leads only when the preview is one plain transfer, which the fee
+payer doesn't send, with compute-budget or memo instructions at most;
+anything else is "Approve this action", and from a verified site, an
+instruction LazorKit doesn't read is a caution ("Uses a service LazorKit
+can't read."). Details lists the instructions and their programs. A
 recipient is shown as an identicon and its first and last four characters;
-tapping it shows the whole address in groups of four, with Copy. A preview
-whose blockhash is valid on devnet is marked "Not real money". The fee line
-says "Paid by <app>" only for a fee payer registered to that app
-(`feePayers`); a payment to the fee payer is shown as a fee the user pays.
+tapping it shows the whole address in groups of four, with Copy. The
+network is the preview's too: Details names it as the app's ("Solana Devnet
+(from Acme's preview)"), and a preview for a network other than the one the
+app asked for is a caution. The fee line says "Paid by <app>" only for a fee
+payer registered to that app (`feePayers`); a payment to the fee payer is
+shown as a fee the user pays.
 
 Colours: one accent (indigo) for the recommended button and the focus ring;
 risk tiers that differ in lightness and carry their own icon and words; light
@@ -132,9 +146,10 @@ and buttons) is fully on screen and not covered, faded or transformed by the
 embedding page. A frame too small to show the request at its minimum height
 keeps the buttons off.
 
-Safari and Firefox do not report this. There, a transaction also needs an
-explicit confirmation (a wallet change from a requester that isn't registered
-always does), and telemetry records `visibility: "untracked"`. Until `framing.mode` is
+Safari and Firefox do not report this. There, a transaction and a change
+LazorKit can't show from a registered site also need an explicit
+confirmation (one from a requester that isn't registered always does), and
+telemetry records `visibility: "untracked"`. Until `framing.mode` is
 `enforce`, a site that is not registered can frame the portal on those
 browsers without the portal being able to tell that it is covered.
 
@@ -311,7 +326,7 @@ virtual authenticator, and a fake RPC. It covers connect, messages, a
 transaction, approvals, refusals, covered and short frames, popups, redirects,
 headers, the content policy and telemetry, and the screens' own behaviour
 (the caution and danger steps, Escape, a passkey step that doesn't finish,
-the address sheet).
+the address sheet, the way back after a redirect).
 
 ```bash
 # a built @lazorkit/wallet (lazor-kit packages/react after `pnpm build`)

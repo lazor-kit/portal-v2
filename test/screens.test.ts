@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { hostParts, originHost } from '../src/security/domain.ts';
+import { hostParts, originHost, sameSite } from '../src/security/domain.ts';
 import { badgeExplainer, whoIsAsking } from '../src/security/identity.ts';
 import { refusalScreen, SIGNED_NOTHING } from '../src/security/refusal-screen.ts';
 import { REFUSAL_TEXT } from '../src/security/refusal-text.ts';
@@ -27,6 +27,16 @@ test('the registered name of a host is set apart, by the Public Suffix List (pri
   assert.equal(originHost('fernway://cb'), null);
 });
 
+test('same site: one registrable domain and scheme; a shared host is many sites', () => {
+  assert.equal(sameSite('https://app.fernway.example', 'https://www.fernway.example'), true);
+  assert.equal(sameSite('https://fernway.github.io', 'https://evil.github.io'), false);
+  assert.equal(sameSite('https://www.fernway.example', 'https://www.fernway.example.evil.example'), false);
+  assert.equal(sameSite('http://www.fernway.example', 'https://www.fernway.example'), false);
+  assert.equal(sameSite('http://localhost:5174', 'http://localhost:4173'), true);
+  assert.equal(sameSite('http://127.0.0.1:5175', 'http://localhost:5174'), false);
+  assert.equal(sameSite('https://www.fernway.example', null), false);
+});
+
 test('who is asking: the registered name is a verified site; any other origin is its host, not verified', () => {
   const verified = whoIsAsking({ channel: 'iframe', label: 'https://www.fernway.example', appName: 'Fernway' });
   assert.deepEqual([verified.kind, verified.title, verified.name, verified.verified, verified.host], ['site', 'Fernway', 'Fernway', true, 'www.fernway.example']);
@@ -41,12 +51,22 @@ test('who is asking: the registered name is a verified site; any other origin is
   assert.equal(local.insecure, true);
 });
 
-test('who is asking: an app scheme is never verified, registered or not; a registered https destination is a site', () => {
+test('who is asking: on the redirect channel nothing is verified; a registered destination is where the answer returns', () => {
   const app = whoIsAsking({ channel: 'redirect', label: 'fernway://callback', appName: 'Fernway' });
   assert.deepEqual([app.kind, app.title, app.name, app.verified, app.returnsTo], ['app', 'An app on this phone', 'the app', false, 'fernway://callback']);
   assert.match(badgeExplainer(app), /a link Fernway registered\. LazorKit can't confirm which app receives it\./);
+  // Any page can open the portal with a registered https destination: named, never "Verified site".
   const web = whoIsAsking({ channel: 'redirect', label: 'https://www.fernway.example', appName: 'Fernway' });
-  assert.deepEqual([web.kind, web.verified, web.host], ['site', true, 'www.fernway.example']);
+  assert.deepEqual([web.kind, web.verified, web.destination, web.registeredAs, web.host, web.name], ['site', false, true, 'Fernway', 'www.fernway.example', 'Fernway']);
+  assert.equal(
+    badgeExplainer(web),
+    "The answer goes to www.fernway.example, an address Fernway registered with LazorKit. LazorKit can't tell which page opened this.",
+  );
+  const unregistered = whoIsAsking({ channel: 'redirect', label: 'https://swap.tinydex.fun' });
+  assert.deepEqual([unregistered.verified, unregistered.destination, unregistered.registeredAs], [false, true, null]);
+  assert.match(badgeExplainer(unregistered), /^LazorKit hasn't verified who runs this site\./);
+  // The same origin in a frame or a popup is the browser's word, and verified.
+  assert.equal(whoIsAsking({ channel: 'popup', label: 'https://www.fernway.example', appName: 'Fernway' }).destination, false);
   assert.equal(whoIsAsking({ channel: 'iframe', label: null }).kind, 'unknown');
   assert.equal(whoIsAsking({ channel: 'webview', label: 'In-app browser' }).verified, false);
 });
@@ -108,7 +128,8 @@ test('colours: text at least 4.5:1, outlines and identicons at least 3:1, in lig
       ['danger-text', 'surface', 4.5],
       ['accent', 'surface', 3],
       ['caution-line', 'surface', 3],
-      ['test', 'surface', 3],
+      ['field-line', 'surface', 3],
+      ['field-line', 'ground', 3],
     ];
     for (let i = 0; i < 8; i++) pairs.push([`id-${i}`, 'surface', 3], [`id-${i}`, 'ground', 3]);
     for (const [fg, bg, min] of pairs) {

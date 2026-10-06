@@ -45,3 +45,28 @@ export function originHost(origin: string | null): string | null {
     return null;
   }
 }
+
+/**
+ * Whether two web origins are the same site: the same scheme and registrable
+ * domain (by the Public Suffix List, private domains included), so
+ * app.fernway.example and www.fernway.example are one site and two
+ * foo.github.io sites are not. Hosts with no registrable domain (localhost,
+ * an IP address) must match exactly.
+ */
+export function sameSite(a: string | null, b: string | null): boolean {
+  if (!a || !b) return false;
+  let x: URL;
+  let y: URL;
+  try {
+    x = new URL(a);
+    y = new URL(b);
+  } catch {
+    return false;
+  }
+  if (x.protocol !== y.protocol) return false;
+  const site = (url: URL) => {
+    const parsed = parse(url.hostname, { allowPrivateDomains: true });
+    return !parsed.isIp && parsed.domain ? parsed.domain : url.hostname;
+  };
+  return site(x) === site(y);
+}

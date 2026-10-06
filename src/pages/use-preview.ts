@@ -71,8 +71,3 @@ export function usePreview(preview: string | null, requestedCluster: Cluster | n
   )
   return { loading, simulation, network, decoded, summary }
 }
-
-/** Whether the preview's network is proven to be devnet: its blockhash is valid there, so it can't move real money. */
-export function isTestNetwork(state: PreviewState): boolean {
-  return state.network?.verified === true && state.network.cluster === "devnet"
-}

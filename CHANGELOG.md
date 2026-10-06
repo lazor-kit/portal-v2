@@ -37,8 +37,8 @@
   page becomes visible or gains focus, or the mouse enters the frame. In a
   frame on Chromium-based browsers, they act only while the requester, the
   request and the buttons are all fully on screen and uncovered. Safari and
-  Firefox cannot report that; there, transactions also ask for an explicit
-  confirmation.
+  Firefox cannot report that; there, transactions and changes LazorKit can't
+  show also ask for an explicit confirmation.
 - The portal answers an optional `lazorkit:hello` handshake with
   `lazorkit:hello-ack`.
 - New approval screens: each leads with one short line saying what is asked
@@ -46,19 +46,24 @@
   caution or danger, one sentence and two facts, with everything else in
   Details. Buttons say what happens ("Approve with passkey", "Sign with
   passkey", "Continue with passkey"); Cancel is a labelled button, and Escape
-  cancels. One caption line names the passkey the device will ask for; the
+  cancels (with the address sheet open, it closes the sheet). One caption line names the passkey the device will ask for; the
   first approval in a browser, and a retry, explain that the device may say
   "Sign in".
 - The header names the requester from its origin and the registry only:
   "Verified site" with the registered name and the host, or the host and
-  "Not verified"; an app destination is "An app on this phone".
+  "Not verified". On the redirect channel, a registered web destination is
+  where the answer returns ("Returns to", "Registered link"), and an app
+  destination is "An app on this phone"; a redirect opened from another site
+  is a caution on transactions and changes LazorKit can't show.
 - Transaction previews are shown as the app's claim ("Acme says"), with the
   recipient as an identicon and its first and last four characters; the whole
-  address, in groups of four with Copy, is one tap away. Previews on devnet
-  are marked "Not real money".
+  address, in groups of four with Copy, is one tap away. The amount leads
+  only for a preview that is one plain transfer; anything LazorKit doesn't
+  read is a caution. The network is named in Details as the app's preview's,
+  and a network other than the one the app asked for is a caution.
 - A 32-byte request with no preview is shown as "Approve a change LazorKit
-  can't show", with Cancel recommended: a caution from a registered site, a
-  danger with a confirmation step (and a 1.5 s delay after its box is ticked)
+  can't show", with Cancel recommended: a caution from a registered site (a
+  frame or a popup), a danger with a confirmation step (and a 1.5 s delay after its box is ticked)
   from any other requester. A message that isn't text is shown with a
   caution, and its fingerprint in Details.
 - Refusals say what happened in plain words, and that the passkey signed
@@ -67,6 +72,9 @@
 - `registry.json` takes `feePayers`, fee payer keys an app alone uses; a
   transaction paid by one shows "Fee: Paid by <name>".
 - A new passkey is named "LazorKit · <date>" unless renamed in Details.
+- After answering, a popup or a redirect shows "Back to <app>". A popup
+  stays open 300 ms after posting its answer, so the SDK reads the answer
+  before it sees the popup close.
 
 ### For operators
 

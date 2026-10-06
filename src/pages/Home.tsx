@@ -11,6 +11,7 @@ import { WalletConnection } from "@/components/wallet-connection"
 import { refusalText } from "@/security/refusal-text"
 import { refusalScreen } from "@/security/refusal-screen"
 import { toHex } from "@/security/encoding"
+import { originHost, sameSite } from "@/security/domain"
 import { browserFamily, isFramed, requesterInput, watchParentMessages } from "@/security/environment"
 import { DecisionSurface, supportsVisibilityTracking } from "@/security/gesture"
 import type { ParentMessage } from "@/security/handshake"
@@ -21,9 +22,9 @@ import { checkRedirect, destinationLabel } from "@/security/redirect"
 import { appForOrigin } from "@/security/registry"
 import { evaluateRequest } from "@/security/request"
 import { resolveRequester } from "@/security/requester"
-import { refusalRoute, routeFor, sendReply, type ConnectedResult, type PortalResult, type ReplyRoute, type ReplyWindow } from "@/security/reply"
+import { redirectUrlFor, refusalRoute, routeFor, sendReply, type ConnectedResult, type PortalResult, type ReplyRoute, type ReplyWindow } from "@/security/reply"
 import { buildEvent, sendEvent, type Outcome, type VisibilityTracking } from "@/security/telemetry"
-import { isTestNetwork, usePreview, type PreviewState } from "@/pages/use-preview"
+import { usePreview, type PreviewState } from "@/pages/use-preview"
 import { parseCluster, type ResolvedCluster } from "@/utils/cluster"
 import { paymentHero } from "@/utils/preview"
 import { approvedBefore, rememberApproval } from "@/utils/storage"
@@ -33,6 +34,12 @@ import { ceremonyErrorText, signChallenge } from "@/utils/webauthn"
 const SETTLE_MS = 4000
 /** When the decision is reported, so evidence that arrives just after load is included. */
 const REPORT_AFTER_MS = 1500
+/**
+ * How long a popup stays open after posting its answer. The SDK takes a
+ * message only from the popup it opened, and stops listening once it sees
+ * that popup closed; closing at once could land before the message is read.
+ */
+const POPUP_CLOSE_AFTER_MS = 300
 
 type Phase = "review" | "busy" | "cancelled" | "done" | "undelivered" | "closed"
 
@@ -43,7 +50,7 @@ const replyWindow: ReplyWindow = {
   get opener() {
     return window.opener ?? null
   },
-  close: () => window.close(),
+  close: () => window.setTimeout(() => window.close(), POPUP_CLOSE_AFTER_MS),
   navigate: (url) => window.location.assign(url),
 }
 
@@ -70,10 +77,9 @@ function approvingFor(subject: Subject | null, preview: PreviewState, name: stri
       return { hero: LEGACY_TITLE, next: `${name} takes it from here.` }
     case "transaction": {
       const payment = preview.summary?.payment ?? null
-      const test = isTestNetwork(preview)
       return payment
-        ? { hero: paymentHero(payment), to: payment.to, amount: true, test, says: name, next: `${name} sends it now. Payments can't be undone.` }
-        : { hero: "Approve this action", test, says: name, next: `${name} sends it now. It can't be undone.` }
+        ? { hero: paymentHero(payment), to: payment.to, amount: true, says: name, next: `${name} sends it now. Payments can't be undone.` }
+        : { hero: "Approve this action", says: name, next: `${name} sends it now. It can't be undone.` }
     }
     default:
       return { hero: `Sign in to ${name}`, next: "" }
@@ -126,6 +132,9 @@ export default function Home() {
   latest.current = { route, evaluation, requester, redirect, network }
   /** One answer per request: a reply already sent is never followed by another. */
   const replied = useRef(false)
+  /** The answer as it went out, for "Back to <App>": the same answer, the same way, never another. */
+  const delivered = useRef<{ route: ReplyRoute; result: PortalResult } | null>(null)
+  const [deliveredBy, setDeliveredBy] = useState<ReplyRoute["channel"] | null>(null)
   /** Stops a passkey prompt that is still open when the request is canceled. */
   const ceremony = useRef<AbortController | null>(null)
 
@@ -166,6 +175,10 @@ export default function Home() {
     reportRequest()
     const delivery = sendReply(route, result, replyWindow)
     report("result", delivery === "dropped" ? "undelivered" : outcome, reason)
+    if (delivery !== "dropped") {
+      delivered.current = { route, result }
+      setDeliveredBy(route.channel)
+    }
     setAnswered(result.type)
     setPhase(delivery === "dropped" ? "undelivered" : "done")
   }, [report, reportRequest])
@@ -204,6 +217,19 @@ export default function Home() {
     if (latest.current.evaluation.decision.outcome !== "show") return
     finish(result, "approved")
   }, [finish])
+
+  /**
+   * Back to the app after the answer went: a popup closes (the SDK has the
+   * answer); a redirect goes to the same destination with the same answer,
+   * for when the app didn't open. In a frame the SDK closes the dialog.
+   */
+  const backToApp = useCallback(() => {
+    const sent = delivered.current
+    if (!sent) return
+    if (sent.route.channel === "redirect") replyWindow.navigate(redirectUrlFor(sent.route.url, sent.result, sent.route.legacyExpo))
+    else if (sent.route.channel === "popup") window.close()
+  }, [])
+  const onBack = deliveredBy === "redirect" || deliveredBy === "popup" ? backToApp : undefined
 
   const closeRefusal = useCallback((reason: string) => {
     // Back to the requesting origin or a registered destination only.
@@ -245,9 +271,15 @@ export default function Home() {
   const name = who.name
   const approving = approvingFor(subject, preview, name)
   const explain = firstTime || retry
+  // On the redirect channel, the site that opened the portal, when it isn't
+  // the destination's own site: a caution where money or control is at stake.
+  const openedElsewhere =
+    requester.channel === "redirect" && requester.openedFrom && !sameSite(requester.openedFrom, who.origin)
+      ? (originHost(requester.openedFrom) ?? requester.openedFrom)
+      : null
   // Where the request came from, beyond the header: in Details on every screen.
   const context: Row[] = [
-    ...(who.kind === "app" ? [{ label: "Who's asking", value: badgeExplainer(who) }] : []),
+    ...(who.kind === "app" || who.destination ? [{ label: "Who's asking", value: badgeExplainer(who) }] : []),
     ...(requester.embeddedIn.length ? [{ label: "Opened inside", value: requester.embeddedIn.join(" › "), testId: "opened-inside" }] : []),
     ...(requester.openedFrom ? [{ label: "Opened from", value: requester.openedFrom, testId: "opened-from" }] : []),
   ]
@@ -257,11 +289,11 @@ export default function Home() {
   if (phase === "done") {
     body =
       answered === "connected" ? (
-        <SignedIn name={name} />
+        <SignedIn name={name} onBack={onBack} />
       ) : answered === "signed" ? (
-        <Receipt approving={approving} name={name} />
+        <Receipt approving={approving} name={name} onBack={onBack} />
       ) : (
-        <Ended name={name} refused={decision.outcome === "refuse"} />
+        <Ended name={name} refused={decision.outcome === "refuse"} onBack={onBack} />
       )
   } else if (phase === "undelivered") {
     body = <Undelivered name={name} />
@@ -306,6 +338,8 @@ export default function Home() {
         kind="approval"
         fingerprint={toHex(subject.challenge)}
         verified={who.kind === "site" && who.verified}
+        caution={openedElsewhere ? `This request was opened from another site: ${openedElsewhere}.` : null}
+        confirmRequired={visibility === "untracked"}
         name={name}
         context={context}
         framed={framed}
@@ -322,6 +356,7 @@ export default function Home() {
         who={who}
         app={app}
         embeddedIn={requester.embeddedIn}
+        openedFrom={openedElsewhere}
         context={context}
         framed={framed}
         explain={explain}

@@ -1,12 +1,12 @@
-import { useId, useState, type ReactNode } from "react"
+import type { ReactNode } from "react"
 import { ChevronDown, Fingerprint, Info, OctagonAlert, Quote, TriangleAlert } from "lucide-react"
 import { buttonClass } from "@/lib/ui"
 import { portalHost } from "@/utils/portal"
 
 /**
- * The parts every approval screen is built from, top to bottom: hero, test
- * chip, caution row, one sentence, up to two facts, Details, then the
- * sticky buttons with one caption line. Risk always carries an icon of its
+ * The parts every approval screen is built from, top to bottom: hero,
+ * caution row, one sentence, up to two facts, Details, then the sticky
+ * buttons with one caption line. Risk always carries an icon of its
  * own shape and words, never colour alone.
  */
 
@@ -113,31 +113,6 @@ export function Facts({ rows }: { rows: readonly Row[] }) {
         </div>
       ))}
     </dl>
-  )
-}
-
-/** "Not real money": devnet and testnet requests, with what it means one tap away. */
-export function TestChip() {
-  const [open, setOpen] = useState(false)
-  const id = useId()
-  return (
-    <div className="space-y-1">
-      <button
-        type="button"
-        className="inline-flex min-h-11 items-center"
-        aria-expanded={open}
-        aria-controls={id}
-        onClick={() => setOpen((v) => !v)}
-        data-testid="test-chip"
-      >
-        <span className="rounded-full border border-dashed border-test px-2.5 py-0.5 text-[13px] leading-[18px] text-ink-2">Not real money</span>
-      </button>
-      {open && (
-        <p id={id} className="text-[14px] leading-[20px] text-ink-2">
-          Test mode on Solana Devnet. Nothing here has real value.
-        </p>
-      )}
-    </div>
   )
 }
 

@@ -123,7 +123,7 @@ export function WalletConnection({ proof, who, context, framed, onConnected, onC
                 value={accountName}
                 maxLength={MAX_NAME}
                 onChange={(e) => setAccountName(e.target.value)}
-                className="h-12 w-full rounded-xl border border-line bg-surface px-3 text-[16px] text-ink"
+                className="h-12 w-full rounded-xl border border-field-line bg-surface px-3 text-[16px] text-ink"
                 data-testid="account-name"
               />
               <span className="block text-[13px] leading-[18px] text-ink-2">Your device shows this name when it asks which passkey to use.</span>
@@ -136,7 +136,8 @@ export function WalletConnection({ proof, who, context, framed, onConnected, onC
   }
 
   const rows: Row[] = [
-    ...(who.verified
+    // An app or a redirect destination has its own "Who's asking" in `context`.
+    ...(who.verified || who.kind === "app" || who.destination
       ? []
       : [
           {

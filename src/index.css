@@ -19,6 +19,8 @@
     --ink: #17191c;
     --ink-2: #565b63;
     --line: #e3e1da;
+    /* A text field's outline: at least 3:1, unlike the dividers' --line. */
+    --field-line: #80858e;
     --accent: #3b3fd8;
     --on-accent: #ffffff;
     --info-bg: #eef1f4;
@@ -29,7 +31,6 @@
     --danger-bg: #9b1c1c;
     --danger-ink: #ffffff;
     --danger-text: #9b1c1c;
-    --test: #565b63;
 
     /* Identicon colours: each at least 3:1 against both surfaces and grounds. */
     --id-0: #2f6fd6;
@@ -47,7 +48,7 @@
     --muted: var(--ground);
     --muted-foreground: var(--ink-2);
     --border: var(--line);
-    --input: var(--line);
+    --input: var(--field-line);
     --ring: var(--accent);
     --primary: var(--accent);
     --primary-foreground: var(--on-accent);
@@ -64,6 +65,7 @@
         --ink: #ecedef;
         --ink-2: #a3a8b0;
         --line: #2c2f35;
+        --field-line: #757a83;
         --accent: #8e91ff;
         --on-accent: #0e0f2e;
         --info-bg: #222831;
@@ -74,7 +76,6 @@
         --danger-bg: #f2555a;
         --danger-ink: #1b0000;
         --danger-text: #f2555a;
-        --test: #a3a8b0;
     }
 }
 
@@ -86,6 +87,7 @@
     --color-ink: var(--ink);
     --color-ink-2: var(--ink-2);
     --color-line: var(--line);
+    --color-field-line: var(--field-line);
     --color-accent: var(--accent);
     --color-on-accent: var(--on-accent);
     --color-info-bg: var(--info-bg);
@@ -96,7 +98,6 @@
     --color-danger-bg: var(--danger-bg);
     --color-danger-ink: var(--danger-ink);
     --color-danger-text: var(--danger-text);
-    --color-test: var(--test);
     --color-background: var(--background);
     --color-foreground: var(--foreground);
     --color-muted: var(--muted);

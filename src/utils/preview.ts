@@ -3,7 +3,9 @@
  * the fee payer, and the plain transfers (System Program SOL transfers, and
  * Token or Token-2022 Transfer and TransferChecked) with their amounts and
  * destinations. Only instructions of those programs are read as transfers;
- * any other program is listed and left alone.
+ * compute-budget and memo instructions move nothing; every other
+ * instruction is counted as one LazorKit didn't read, and a preview with one
+ * never gets a payment hero.
  *
  * Until requests carry the signed preimage, a preview is the requesting
  * app's claim: the screen attributes everything read here to the app.
@@ -15,6 +17,14 @@ import { paysFees, type RegisteredApp } from '../security/registry.ts';
 export const SYSTEM_PROGRAM = '11111111111111111111111111111111';
 export const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 export const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+export const COMPUTE_BUDGET_PROGRAM = 'ComputeBudget111111111111111111111111111111';
+export const MEMO_PROGRAM = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
+export const MEMO_V1_PROGRAM = 'Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo';
+
+/** Programs whose instructions move nothing: they set the compute budget, or attach a note. */
+const NEUTRAL_PROGRAMS: readonly string[] = [COMPUTE_BUDGET_PROGRAM, MEMO_PROGRAM, MEMO_V1_PROGRAM];
+/** Programs LazorKit reads some instructions of (the transfers). */
+const READ_PROGRAMS: readonly string[] = [SYSTEM_PROGRAM, TOKEN_PROGRAM, TOKEN_2022_PROGRAM];
 
 /** Mainnet mints the screen names; every other token is "another token". */
 export const KNOWN_TOKENS: Readonly<Record<string, { symbol: string; decimals: number }>> = {
@@ -31,6 +41,8 @@ export type DecodedTransfer =
       readonly amount: bigint;
       /** The source token account. */
       readonly source: string;
+      /** The account that signs for the source: its owner or delegate. */
+      readonly authority: string;
       /** The destination token account (not its owner). */
       readonly destination: string;
       /** Named by TransferChecked; otherwise read from the source account. */
@@ -44,6 +56,14 @@ export interface DecodedPreview {
   readonly feePayer: string | null;
   readonly programs: readonly string[];
   readonly transfers: readonly DecodedTransfer[];
+  /** How many instructions the preview has. */
+  readonly instructions: number;
+  /**
+   * The programs of the instructions LazorKit didn't read: anything but a
+   * plain transfer, a compute-budget or a memo instruction, and any
+   * instruction that names an account from a lookup table.
+   */
+  readonly unread: readonly string[];
 }
 
 interface RawInstruction {
@@ -68,20 +88,27 @@ function message(bytes: Uint8Array): VersionedMessage | null {
 /**
  * The instructions of a preview whose accounts are all in the message itself.
  * An instruction that names an account from a lookup table is listed by
- * program only, and never read as a transfer.
+ * program only (in `skipped`), and never read as a transfer.
  */
-function instructionsOf(msg: VersionedMessage): { list: RawInstruction[]; programs: string[] } {
+function instructionsOf(msg: VersionedMessage): { list: RawInstruction[]; programs: string[]; skipped: string[]; count: number } {
   const keys = msg.staticAccountKeys.map((k: PublicKey) => k.toBase58());
   const list: RawInstruction[] = [];
   const programs: string[] = [];
+  const skipped: string[] = [];
   for (const ix of msg.compiledInstructions) {
     const programId = keys[ix.programIdIndex];
-    if (!programId) continue;
+    if (!programId) {
+      skipped.push('');
+      continue;
+    }
     if (!programs.includes(programId)) programs.push(programId);
-    if (ix.accountKeyIndexes.some((i) => i >= keys.length)) continue;
+    if (ix.accountKeyIndexes.some((i) => i >= keys.length)) {
+      skipped.push(programId);
+      continue;
+    }
     list.push({ programId, accounts: ix.accountKeyIndexes.map((i) => keys[i]), data: ix.data });
   }
-  return { list, programs };
+  return { list, programs, skipped, count: msg.compiledInstructions.length };
 }
 
 function u64(data: Uint8Array, offset: number): bigint {
@@ -98,11 +125,11 @@ function transferOf(ix: RawInstruction): DecodedTransfer | null {
   if (ix.programId === TOKEN_PROGRAM || ix.programId === TOKEN_2022_PROGRAM) {
     // Transfer: u8 3, u64 amount; accounts [source, destination, owner, …].
     if (data[0] === 3 && data.length === 9 && accounts.length >= 3) {
-      return { kind: 'token', program: ix.programId, amount: u64(data, 1), source: accounts[0], destination: accounts[1], mint: null, decimals: null };
+      return { kind: 'token', program: ix.programId, amount: u64(data, 1), source: accounts[0], authority: accounts[2], destination: accounts[1], mint: null, decimals: null };
     }
     // TransferChecked: u8 12, u64 amount, u8 decimals; accounts [source, mint, destination, owner, …].
     if (data[0] === 12 && data.length === 10 && accounts.length >= 4) {
-      return { kind: 'token', program: ix.programId, amount: u64(data, 1), source: accounts[0], destination: accounts[2], mint: accounts[1], decimals: data[9] };
+      return { kind: 'token', program: ix.programId, amount: u64(data, 1), source: accounts[0], authority: accounts[3], destination: accounts[2], mint: accounts[1], decimals: data[9] };
     }
   }
   return null;
@@ -118,9 +145,26 @@ export function decodePreview(base64: string): DecodedPreview | null {
   }
   const msg = message(bytes);
   if (!msg) return null;
-  const { list, programs } = instructionsOf(msg);
-  const transfers = list.map(transferOf).filter((t): t is DecodedTransfer => t !== null);
-  return { feePayer: msg.staticAccountKeys[0]?.toBase58() ?? null, programs, transfers };
+  const { list, programs, skipped, count } = instructionsOf(msg);
+  const transfers: DecodedTransfer[] = [];
+  const unread = [...skipped];
+  for (const ix of list) {
+    const transfer = transferOf(ix);
+    if (transfer) transfers.push(transfer);
+    else if (!NEUTRAL_PROGRAMS.includes(ix.programId)) unread.push(ix.programId);
+  }
+  return { feePayer: msg.staticAccountKeys[0]?.toBase58() ?? null, programs, transfers, instructions: count, unread };
+}
+
+/**
+ * What the preview does that LazorKit didn't read: `service` when an
+ * instruction belongs to a program it can't read at all, `step` when only
+ * instructions of the System or Token programs went unread (an approval or
+ * a closed account, say), null when it read everything.
+ */
+export function unreadKind(decoded: DecodedPreview): 'service' | 'step' | null {
+  if (!decoded.unread.length) return null;
+  return decoded.unread.some((program) => !READ_PROGRAMS.includes(program)) ? 'service' : 'step';
 }
 
 /** `amount` in units of 10^-decimals, without trailing zeros: 1500000, 6 → "1.5". */
@@ -155,7 +199,11 @@ export interface Payment {
 }
 
 export interface PreviewSummary {
-  /** The one payment the preview makes, when it makes exactly one (besides fees). */
+  /**
+   * The one payment the preview makes: only when it is the one plain
+   * transfer besides fees, every other instruction is a compute-budget or
+   * memo instruction, and the fee payer isn't the one paying.
+   */
   readonly payment: Payment | null;
   /** Payments to the fee payer: a fee the user pays. */
   readonly fees: readonly Payment[];
@@ -180,11 +228,15 @@ function paymentOf(t: DecodedTransfer, facts: TokenFacts | null): Payment {
 
 /** The payment and fees a decoded preview makes, with token owners and decimals where the chain gave them. */
 export function summarizePreview(decoded: DecodedPreview, facts: TokenFacts | null): PreviewSummary {
-  const payments = decoded.transfers.map((t) => paymentOf(t, facts));
-  const isFee = (p: Payment) => decoded.feePayer !== null && p.to === decoded.feePayer && (p.toIsOwner || p.symbol === 'SOL');
-  const fees = payments.filter(isFee);
-  const others = payments.filter((p) => !isFee(p));
-  return { payment: others.length === 1 ? others[0] : null, fees, transfers: others.length };
+  const { feePayer } = decoded;
+  const payments = decoded.transfers.map((t) => ({ t, p: paymentOf(t, facts) }));
+  const isFee = (p: Payment) => feePayer !== null && p.to === feePayer && (p.toIsOwner || p.symbol === 'SOL');
+  // The fee payer is the app's key, not the user's: what it sends isn't the user's payment.
+  const fromFeePayer = (t: DecodedTransfer) => feePayer !== null && (t.kind === 'sol' ? t.from : t.authority) === feePayer;
+  const fees = payments.filter(({ p }) => isFee(p)).map(({ p }) => p);
+  const others = payments.filter(({ p }) => !isFee(p));
+  const only = others.length === 1 && decoded.unread.length === 0 && !fromFeePayer(others[0].t) ? others[0].p : null;
+  return { payment: only, fees, transfers: others.length };
 }
 
 /** What is paid, in words: "0.25 SOL", "5 of another token", "another token". */

@@ -1,14 +1,12 @@
 import { Ban, Check, KeyRound, Loader2, X } from "lucide-react"
 import { AddressChip, ShortAddress } from "@/components/address"
-import { Actions, AppSays, Body, Caption, Details, Hero, Note, PlainButton, Sentence, StatusMark, TestChip } from "@/components/sheet"
+import { Actions, AppSays, Body, Caption, Details, Hero, Note, PlainButton, Sentence, StatusMark } from "@/components/sheet"
 
 /** What is being approved, as the review showed it: the same hero on the waiting, canceled and approved screens. */
 export interface Approving {
   readonly hero: string
   /** The recipient of a payment. */
   readonly to?: string
-  /** The request is on a network proven to be a test network. */
-  readonly test?: boolean
   /** The hero is an amount ("Send 0.25 SOL"). */
   readonly amount?: boolean
   /** The hero is the app's claim (a transaction preview): "<App> says". */
@@ -118,10 +116,28 @@ export function Cancelled({
 }
 
 /**
+ * The way back once the answer has gone: "Back to <App>" where the page can
+ * take the user there itself (a popup closes, a redirect goes to the same
+ * answer's address again); in a frame the app closes the dialog, so there is
+ * only the caption.
+ */
+function Returning({ name, onBack }: { name: string; onBack?: () => void }) {
+  return (
+    <Actions single caption={<Caption testId="returning" passkey={false}>Returning you to {name}…</Caption>}>
+      {onBack && (
+        <PlainButton tone="primary" onClick={onBack} testId="back-to-app">
+          Back to {name}
+        </PlainButton>
+      )}
+    </Actions>
+  )
+}
+
+/**
  * Approved: the same card as the request, marked "You approved". LazorKit
  * doesn't send anything, so it never says "Sent".
  */
-export function Receipt({ approving, name }: { approving: Approving; name: string }) {
+export function Receipt({ approving, name, onBack }: { approving: Approving; name: string; onBack?: () => void }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="done">
       <Body testId="done-content">
@@ -133,16 +149,15 @@ export function Receipt({ approving, name }: { approving: Approving; name: strin
           {approving.hero}
         </Hero>
         {approving.to && <AddressChip address={approving.to} prefix="to" testId="recipient" />}
-        {approving.test && <TestChip />}
         <Sentence>{approving.next}</Sentence>
       </Body>
-      <Actions single caption={<Caption testId="returning" passkey={false}>Returning you to {name}…</Caption>} />
+      <Returning name={name} onBack={onBack} />
     </div>
   )
 }
 
 /** Signed in: the sign-in's receipt. */
-export function SignedIn({ name }: { name: string }) {
+export function SignedIn({ name, onBack }: { name: string; onBack?: () => void }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="done">
       <Body testId="done-content">
@@ -151,13 +166,13 @@ export function SignedIn({ name }: { name: string }) {
         </StatusMark>
         <Hero>You're signed in to {name}</Hero>
       </Body>
-      <Actions single caption={<Caption testId="returning" passkey={false}>Returning you to {name}…</Caption>} />
+      <Returning name={name} onBack={onBack} />
     </div>
   )
 }
 
 /** Canceled, or refused: the answer went back, and nothing was signed. */
-export function Ended({ name, refused }: { name: string; refused: boolean }) {
+export function Ended({ name, refused, onBack }: { name: string; refused: boolean; onBack?: () => void }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="ended">
       <Body testId="ended-content">
@@ -167,7 +182,7 @@ export function Ended({ name, refused }: { name: string; refused: boolean }) {
         <Hero>{refused ? "Request stopped" : "Nothing was approved"}</Hero>
         <Sentence>Your passkey signed nothing.</Sentence>
       </Body>
-      <Actions single caption={<Caption testId="returning" passkey={false}>Returning you to {name}…</Caption>} />
+      <Returning name={name} onBack={onBack} />
     </div>
   )
 }
