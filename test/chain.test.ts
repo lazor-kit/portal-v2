@@ -459,6 +459,32 @@ test('a short read says how far it went: "Not in your last N transactions"', asy
   assert.deepEqual(relationTo('7NDjLNCJ8F2ptQkVFdheXHbiYwuQM5TfLXwWzG6E8J92', { status: 'ok', value: capped }), { kind: 'not-in-recent', scanned: 5 });
 });
 
+test('a short read never rules a lookalike out: the address it resembles may be just past the window', async () => {
+  const older = 'Fk7hcZhXVhbK8rG1JjNGHGPDvVJTKsUTvJUwAXjs7rGx'; // paid in the 19th newest transaction
+  const twin = alter(older, 3, -4);
+  const whole = await readPaymentHistory(through(REPEAT), REPEAT.vault);
+  assert.deepEqual(checkRecipient(twin, whole).lookalike, { status: 'found', level: 'danger', like: { address: older, kind: 'paid' }, prefix: 3, suffix: 3 });
+
+  const recent = checkRecipient(twin, await readPaymentHistory(through(REPEAT), REPEAT.vault, { maxSignatures: 5 }));
+  assert.deepEqual(recent.relation, { kind: 'not-in-recent', scanned: 5 });
+  assert.deepEqual(recent.lookalike, { status: 'none-in-recent', scanned: 5 });
+  assert.deepEqual(recent.scope, { coverage: 'recent', scanned: 5 });
+});
+
+test('"First time paying" only when every payment out names its recipient', () => {
+  const vault = REPEAT.vault;
+  const [vaultTokens, closedAccount, mint] = [addr(31), addr(32), addr(33)];
+  // Paid out of the vault's token account into an account the transaction does not describe.
+  const unnamed = vaultTransfers(vault, 'sig', tokenTx(mint, [{ authority: vault, source: vaultTokens, sourceOwner: vault, destination: closedAccount, amount: '5' }]));
+  assert.deepEqual(unnamed, { transfers: [], unattributed: 1, counterparties: [] });
+
+  const recipient = addr(34);
+  const complete: PaymentHistory = { vault, coverage: 'complete', scanned: 1, ...unnamed };
+  assert.deepEqual(relationTo(recipient, { status: 'ok', value: complete }), { kind: 'unknown', reason: 'unnamed-recipient' });
+  assert.deepEqual(relationTo(recipient, { status: 'ok', value: { ...complete, coverage: 'recent' } }), { kind: 'not-in-recent', scanned: 1 });
+  assert.deepEqual(relationTo(recipient, { status: 'ok', value: { ...complete, unattributed: 0 } }), { kind: 'first-time' });
+});
+
 test('a transaction that cannot be read ends the window there; payments found past it still count', async () => {
   const third = REPEAT.signatures[2].signature;
   const gap = through(REPEAT, [], { fail: (call) => (call.method === 'getTransaction' && call.params[0] === third ? new Response('bad gateway', { status: 502 }) : null) });

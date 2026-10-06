@@ -16,16 +16,19 @@ import type { Read, ReadFailure } from './transport.ts';
  * The account's relation to the recipient:
  * - `own-account`: the vault itself, or an address the caller proved is the user's;
  * - `paid`: paid this many times (at least: `coverage` says whether the whole history was read);
- * - `first-time`: the whole history was read, and it never paid this address;
+ * - `first-time`: the whole history was read, every payment's recipient was
+ *   named, and none was this address;
  * - `not-in-recent`: not paid in the newest `scanned` transactions; older ones were not read;
- * - `unknown`: the history could not be read, so nothing is said.
+ * - `unknown`: the history could not be read (`reason`), or it was read but
+ *   some payments out went to an address it does not name
+ *   (`unnamed-recipient`), so nothing is said.
  */
 export type Relation =
   | { readonly kind: 'own-account' }
   | { readonly kind: 'paid'; readonly times: number; readonly lastBlockTime: number | null; readonly coverage: PaymentHistory['coverage'] }
   | { readonly kind: 'first-time' }
   | { readonly kind: 'not-in-recent'; readonly scanned: number }
-  | { readonly kind: 'unknown'; readonly reason: ReadFailure | 'invalid-address' };
+  | { readonly kind: 'unknown'; readonly reason: ReadFailure | 'invalid-address' | 'unnamed-recipient' };
 
 export interface KnownAddress {
   readonly address: string;
@@ -53,12 +56,16 @@ export type LookalikeLevel = 'danger' | 'caution';
  * - `found`: the recipient is not `like`, but shares its ends: `danger` when at
  *   least 3 leading and 3 trailing characters match (the short forms may be
  *   identical); `caution` when only the first 4 or only the last 4 do;
- * - `none`: no such address among those compared (`scope` says which history);
+ * - `none`: no such address among those compared, the whole history included;
+ * - `none-in-recent`: none among those compared, but only the newest
+ *   `scanned` transactions were read: older counterparties were not compared,
+ *   so this is not a clean result and must not be shown as one;
  * - `unknown`: the history could not be read and nothing else matched.
  */
 export type LookalikeResult =
   | { readonly status: 'found'; readonly level: LookalikeLevel; readonly like: KnownAddress; readonly prefix: number; readonly suffix: number }
   | { readonly status: 'none' }
+  | { readonly status: 'none-in-recent'; readonly scanned: number }
   | { readonly status: 'unknown'; readonly reason: ReadFailure };
 
 export interface RecipientCheck {
@@ -132,8 +139,8 @@ export function relationTo(recipient: string, history: Read<PaymentHistory>, own
     const blockTimes = payments.map((payment) => payment.blockTime).filter((time): time is number => time !== null);
     return { kind: 'paid', times, lastBlockTime: blockTimes.length ? Math.max(...blockTimes) : null, coverage: history.value.coverage };
   }
-  if (history.value.coverage === 'complete') return { kind: 'first-time' };
-  return { kind: 'not-in-recent', scanned: history.value.scanned };
+  if (history.value.coverage === 'recent') return { kind: 'not-in-recent', scanned: history.value.scanned };
+  return history.value.unattributed === 0 ? { kind: 'first-time' } : { kind: 'unknown', reason: 'unnamed-recipient' };
 }
 
 /**
@@ -170,5 +177,7 @@ export function checkRecipient(
   }
   const found = findLookalike(recipient, known);
   if (found) return { recipient, relation, lookalike: found, scope };
-  return { recipient, relation, lookalike: history.status === 'ok' ? { status: 'none' } : { status: 'unknown', reason: history.reason }, scope };
+  if (history.status !== 'ok') return { recipient, relation, lookalike: { status: 'unknown', reason: history.reason }, scope };
+  const lookalike: LookalikeResult = history.value.coverage === 'complete' ? { status: 'none' } : { status: 'none-in-recent', scanned: history.value.scanned };
+  return { recipient, relation, lookalike, scope };
 }
