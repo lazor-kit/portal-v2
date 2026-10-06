@@ -94,7 +94,7 @@ test('the display reads web3.js makes all pass and reach the upstream', async ()
   }
   await connection.getProgramAccounts(program, { withContext: true, filters: walletFilters(0x23, 8, wallet.toBase58(), 'base64') });
   await connection.getSignaturesForAddress(vault, { limit: 1000 });
-  await connection.getSignaturesForAddress(vault, { limit: 10, before: signature(), until: signature() }, 'finalized');
+  await connection.getSignaturesForAddress(vault, { limit: 10 }, 'finalized');
   await connection.getParsedTransaction(signature(), { maxSupportedTransactionVersion: 0 });
   await connection.getTransaction(signature(), { maxSupportedTransactionVersion: 0 });
 
@@ -170,8 +170,9 @@ test('balance, account, token account, signature and transaction reads are bound
     ['getSignaturesForAddress', [vault, { limit: 1001 }]],
     ['getSignaturesForAddress', [vault, { limit: 0 }]],
     ['getSignaturesForAddress', [vault, { commitment: 'processed' }]],
-    ['getSignaturesForAddress', [vault, { before: 'not a signature' }]],
-    ['getSignaturesForAddress', [vault, { before: vault }]],
+    // The newest signatures only: no paging.
+    ['getSignaturesForAddress', [vault, { before: signature() }]],
+    ['getSignaturesForAddress', [vault, { limit: 10, until: signature() }]],
     ['getTransaction', [signature()]],
     ['getTransaction', [vault, { encoding: 'jsonParsed' }]],
     ['getTransaction', [signature(), { maxSupportedTransactionVersion: 2 }]],
@@ -264,6 +265,20 @@ test('a finalized transaction is read from the upstream once; nothing else is ke
   await handleRpc(post(balance), d);
   assert.equal(calls.length, 8);
   assert.equal(balanceAnswer.headers.get('cache-control'), 'no-store');
+});
+
+test('an answer from memory costs no budget; a client past its budget still gets one', async () => {
+  const calls: Call[] = [];
+  const limiter = new RateLimiter({ capacity: 1, refillPerSecond: 0, maxClients: 100 });
+  const d = deps(calls, { cache: new MemoryCache(), limiter });
+  const finalized = rpc('getTransaction', [FINALIZED_SIG, { encoding: 'jsonParsed', commitment: 'finalized', maxSupportedTransactionVersion: 0 }]);
+
+  assert.equal((await handleRpc(post(finalized), d)).status, 200);
+  for (let i = 0; i < 5; i++) assert.equal((await handleRpc(post(finalized), d)).status, 200);
+  assert.equal(calls.length, 1);
+  // The one call to the upstream used the whole budget.
+  assert.equal((await handleRpc(post(rpc('getBalance', [key()])), d)).status, 429);
+  assert.equal(calls.length, 1);
 });
 
 test('the memory cache keeps to its size, dropping the least recently used', () => {

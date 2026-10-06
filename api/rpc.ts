@@ -32,9 +32,9 @@
  *
  * Callers: pages of the origin serving the request (same-origin), the
  * deployment's own Vercel URLs, and PORTAL_ORIGIN. Each client address has a
- * budget of request cost per minute (`RATE_LIMIT`), kept in the memory of the
- * instance that serves it: a first line of defence, not a replacement for a
- * rate limit at the edge.
+ * budget of request cost (`RATE_LIMIT`), charged for calls to the upstream
+ * and kept in the memory of the instance that serves it: a first line of
+ * defence, not a replacement for a rate limit at the edge.
  *
  * Responses are never stored by caches (`no-store`): account state changes.
  * Finalized transactions do not, so the instance keeps recent ones in memory
@@ -313,13 +313,11 @@ function checkParams(method: AllowedMethod, params: Json[], cluster: Cluster): s
     case 'getSignaturesForAddress': {
       if (params.length < 1 || params.length > 2 || !isKey(params[0])) return 'expected [address, config]';
       const config = params[1];
-      const invalid = checkHistoryConfig(config, ['commitment', 'minContextSlot', 'limit', 'before', 'until']);
+      // The newest signatures only: no paging back through an address's history.
+      const invalid = checkHistoryConfig(config, ['commitment', 'minContextSlot', 'limit']);
       if (invalid || config === undefined) return invalid;
       if (!isObject(config)) return 'unsupported config';
       if (config.limit !== undefined && (!isCount(config.limit, MAX_SIGNATURES) || config.limit === 0)) return `expected a limit of 1 to ${MAX_SIGNATURES}`;
-      if ((config.before !== undefined && !isSignature(config.before)) || (config.until !== undefined && !isSignature(config.until))) {
-        return 'expected a transaction signature';
-      }
       return null;
     }
     case 'getTransaction': {
@@ -570,9 +568,6 @@ export async function handleRpc(request: Request, deps: RpcDeps): Promise<Respon
   method = checked.request.method;
   const id = checked.request.id;
 
-  const wait = deps.limiter?.take(clientKey(request), METHOD_COST[checked.request.method], deps.now()) ?? 0;
-  if (wait > 0) return finish(rpcError(429, id, -32005, 'rate limited', { 'retry-after': String(wait) }));
-
   const upstream = upstreamFor(deps.env, clusterParam);
   if (!upstream) return finish(rpcError(503, id, -32603, `${clusterParam} RPC is not configured`));
 
@@ -581,6 +576,10 @@ export async function handleRpc(request: Request, deps: RpcDeps): Promise<Respon
   if (cached !== undefined) {
     return finish(new Response(`{"jsonrpc":"2.0","id":${JSON.stringify(id)},"result":${cached}}`, { status: 200, headers: NO_STORE }));
   }
+
+  // Only a call to the upstream costs budget; an answer from memory does not.
+  const wait = deps.limiter?.take(clientKey(request), METHOD_COST[checked.request.method], deps.now()) ?? 0;
+  if (wait > 0) return finish(rpcError(429, id, -32005, 'rate limited', { 'retry-after': String(wait) }));
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
