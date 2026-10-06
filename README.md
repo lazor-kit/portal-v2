@@ -205,12 +205,13 @@ methods are forwarded, each with its parameters checked
 | `getBalance` | one address |
 | `getTokenAccountsByOwner` | one owner, by mint or by program (SPL Token or Token-2022 only), `base64` or `jsonParsed` |
 | `getProgramAccounts` | the LazorKit v2 program of the request's cluster only, `base64`, with exactly two filters: one account type (Authority, Session or DeferredExec) and one wallet at that type's wallet offset |
-| `getSignaturesForAddress` | one address, at most 1000 signatures, `confirmed` or `finalized` |
+| `getSignaturesForAddress` | one address, the newest 1 to 1000 signatures (no `before` or `until`), `confirmed` or `finalized` |
 | `getTransaction` | one signature, `json`, `jsonParsed` or `base64`, transaction version 0 or 1, `confirmed` or `finalized` |
 
 - **Budget.** Each client address (an IPv6 client by its /64) has a budget
   of request cost: 300, refilled at 5 a second. A program listing costs 10,
   a signature list 5, a simulation or token listing 2, anything else 1.
+  Only calls to the upstream are charged; an answer from memory is free.
   Past it, the route answers 429 with `Retry-After` and calls nothing. The
   budget lives in the memory of the instance serving the request: it slows a
   loop, it does not replace a rate limit at the edge.
@@ -247,14 +248,21 @@ fills in a value it could not read.
 |---|---|
 | `readVault` | the vault's SOL, and its SPL Token and Token-2022 accounts with any delegate and delegated amount |
 | `readWalletAccounts` | the wallet's authorities (role, key, policy bytes), sessions (key, expiry slot, limit bytes) and deferred executions; accounts of a newer layout are counted, not decoded |
-| `readPaymentHistory` | payments out of the vault: successful, non-zero SOL transfers from it and token transfers out of its token accounts, by the address paid (for tokens, the owner of the receiving account). Incoming transfers, failed transactions and zero-value transfers never count. It lists the newest 1000 signatures and reads at most 100 successful transactions, and says how many of the newest it read without a gap (`scanned`) and whether that was all of them (`coverage`) |
+| `readPaymentHistory` | payments out of the vault: successful, non-zero SOL transfers from it and token transfers it signed out of its token accounts, by the address paid (for tokens, the owner of the receiving account). Incoming transfers, failed transactions, zero-value transfers and transfers it did not sign never count; their other parties are listed apart as `counterparties`. It lists the newest 1000 signatures and reads at most 100 successful transactions, and says how many of the newest it read without a gap (`scanned`) and whether that was all of them (`coverage`) |
 | `paymentsTo` | from a history: the payments to one address, newest first |
-| `checkRecipient` | from a history: the relation (`paid` with a count and the last time, `first-time`, `not-in-recent` with how many were read, `own-account`, or `unknown`), and the closest lookalike among addresses paid, the user's own and saved ones |
+| `checkRecipient` | from a history: the relation (`paid` with a count and the last time, `first-time`, `not-in-recent` with how many were read, `own-account`, or `unknown`), and the closest lookalike among addresses paid, the user's own and saved ones, then counterparties (`none` only when the whole history was read; `none-in-recent` otherwise) |
 
 Addresses are compared on their full 32 bytes. A lookalike shares the ends of
 a known address without being it: at least 3 leading and 3 trailing
 characters is `danger`; only the first 4 or only the last 4 is `caution`.
-`useRecipientCheck` (`src/hooks`) runs the check for a payment screen.
+A counterparty match (`like.kind === 'counterparty'`) is an address that
+sent money in or got nothing of value: never "paid before". Counterparties
+are compared only when the recipient is not itself paid, own or saved.
+`first-time` needs the whole history read and every payment's recipient
+named; otherwise the relation is `not-in-recent` or `unknown`.
+`useRecipientCheck` (`src/hooks`) runs the check for a payment screen,
+reading each vault's history at most once a minute;
+`forgetPaymentHistory` clears it after a payment.
 
 Telemetry events carry the requester's origin (or `scheme://`), the channel,
 the evidence, the request kind, the outcome and its reason, and whether the
