@@ -284,3 +284,63 @@ export async function readPaymentHistory(transport: Transport, vault: string, op
     },
   };
 }
+
+// ─── Reuse ──────────────────────────────────────────────────────────────────
+
+export const HISTORY_MEMO_DEFAULTS = { ttlMs: 60_000, maxEntries: 16 } as const;
+
+/**
+ * Histories read in the last `ttlMs`, by cluster and vault, so the checks of
+ * one pay screen, and of the next within a minute, share one read (a scan
+ * costs about a hundred calls). A read that failed is not kept. Call
+ * `forget` after a payment from the vault.
+ */
+export class HistoryMemo {
+  private readonly entries = new Map<string, { at: number; read: Promise<Read<PaymentHistory>> }>();
+  private readonly ttlMs: number;
+  private readonly maxEntries: number;
+  private readonly now: () => number;
+
+  constructor(options: { ttlMs?: number; maxEntries?: number; now?: () => number } = {}) {
+    this.ttlMs = options.ttlMs ?? HISTORY_MEMO_DEFAULTS.ttlMs;
+    this.maxEntries = options.maxEntries ?? HISTORY_MEMO_DEFAULTS.maxEntries;
+    this.now = options.now ?? Date.now;
+  }
+
+  /** The history of `vault` on `cluster`: the one read less than `ttlMs` ago, or a new one from `load`. */
+  read(cluster: string, vault: string, load: () => Promise<Read<PaymentHistory>>): Promise<Read<PaymentHistory>> {
+    const key = `${cluster} ${vault}`;
+    const kept = this.entries.get(key);
+    if (kept && this.now() - kept.at < this.ttlMs) return kept.read;
+    const entry = {
+      at: this.now(),
+      read: load().then(
+        (read) => {
+          if (read.status !== 'ok') this.drop(key, entry);
+          return read;
+        },
+        (error: unknown) => {
+          this.drop(key, entry);
+          throw error;
+        },
+      ),
+    };
+    this.entries.delete(key);
+    this.entries.set(key, entry);
+    while (this.entries.size > this.maxEntries) {
+      const oldest = this.entries.keys().next().value;
+      if (oldest === undefined) break;
+      this.entries.delete(oldest);
+    }
+    return entry.read;
+  }
+
+  /** Forgets the history of `vault` on `cluster`, so the next read is fresh. */
+  forget(cluster: string, vault: string): void {
+    this.entries.delete(`${cluster} ${vault}`);
+  }
+
+  private drop(key: string, entry: { at: number; read: Promise<Read<PaymentHistory>> }): void {
+    if (this.entries.get(key) === entry) this.entries.delete(key);
+  }
+}

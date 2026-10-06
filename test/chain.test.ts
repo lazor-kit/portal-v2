@@ -19,6 +19,7 @@ import {
   decodeDeferred,
   decodeSession,
   findLookalike,
+  HistoryMemo,
   lookalikeLevel,
   paymentsTo,
   portalTransport,
@@ -510,6 +511,39 @@ test('over the route’s budget, the scan stops and says so; finalized transacti
   assert.deepEqual(again, once);
   // The second scan re-lists signatures, starts at version 0 again (one refusal), and reads nothing else.
   assert.equal(seen.filter((s) => s.method === 'getTransaction').length, reads + 1);
+});
+
+test('one history read serves every check for a minute; a failed read or a payment starts afresh', async () => {
+  let now = 0;
+  const memo = new HistoryMemo({ ttlMs: 60_000, now: () => now });
+  const seen: Seen[] = [];
+  const transport = through(REPEAT, seen);
+  const lists = () => seen.filter((s) => s.method === 'getSignaturesForAddress').length;
+  const load = () => readPaymentHistory(transport, REPEAT.vault);
+
+  // Checks of two recipients at once, then another a little later: one read.
+  const [a, b] = await Promise.all([memo.read('devnet', REPEAT.vault, load), memo.read('devnet', REPEAT.vault, load)]);
+  assert.equal(a, b);
+  now = 59_000;
+  assert.equal(await memo.read('devnet', REPEAT.vault, load), a);
+  assert.equal(lists(), 1);
+  // Another cluster is another history.
+  await memo.read('mainnet', REPEAT.vault, load);
+  assert.equal(lists(), 2);
+
+  now = 61_000;
+  await memo.read('devnet', REPEAT.vault, load);
+  assert.equal(lists(), 3);
+  memo.forget('devnet', REPEAT.vault);
+  await memo.read('devnet', REPEAT.vault, load);
+  assert.equal(lists(), 4);
+
+  // An unavailable read is not kept: the next check tries again.
+  const down = async (): Promise<Read<PaymentHistory>> => ({ status: 'unavailable', reason: 'rate-limited' });
+  memo.forget('devnet', REPEAT.vault);
+  assert.deepEqual(await memo.read('devnet', REPEAT.vault, down), { status: 'unavailable', reason: 'rate-limited' });
+  assert.equal((await memo.read('devnet', REPEAT.vault, load)).status, 'ok');
+  assert.equal(lists(), 5);
 });
 
 // ─── Lookalikes ─────────────────────────────────────────────────────────────

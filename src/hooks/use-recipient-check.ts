@@ -1,9 +1,12 @@
 /**
  * Hook point for the pay screens: the recipient check for one payment,
  * read through the portal's `/api/rpc`. It does not decide what is shown.
+ *
+ * The vault's history is read once a minute at most and shared by every
+ * check: call `forgetPaymentHistory` after a payment from the vault.
  */
 import { useEffect, useState } from 'react';
-import { checkRecipient, portalTransport, readRecipientCheck, type Cluster, type RecipientCheck } from '@/chain';
+import { checkRecipient, HistoryMemo, portalTransport, readPaymentHistory, type Cluster, type RecipientCheck } from '@/chain';
 
 export type RecipientCheckState = { readonly status: 'idle' } | { readonly status: 'checking' } | { readonly status: 'done'; readonly check: RecipientCheck };
 
@@ -13,6 +16,13 @@ export interface RecipientCheckInput {
   readonly vault: string;
   /** The address being paid (for tokens, the owner, not the token account). */
   readonly recipient: string;
+}
+
+const histories = new HistoryMemo();
+
+/** Forgets the vault's history, so the next check reads it afresh (after a payment from it). */
+export function forgetPaymentHistory(cluster: Cluster, vault: string): void {
+  histories.forget(cluster, vault);
 }
 
 /** `idle` without input; `checking` while the history is read; then the check (which may itself say `unknown`). */
@@ -28,7 +38,9 @@ export function useRecipientCheck(input: RecipientCheckInput | null): RecipientC
     }
     let current = true;
     setState({ status: 'checking' });
-    readRecipientCheck(portalTransport(cluster), vault, recipient)
+    histories
+      .read(cluster, vault, () => readPaymentHistory(portalTransport(cluster), vault))
+      .then((history) => checkRecipient(recipient, history))
       .catch(() => checkRecipient(recipient, { status: 'unavailable', reason: 'malformed' }))
       .then((check) => {
         if (current) setState({ status: 'done', check });
