@@ -1,7 +1,8 @@
 /**
  * What the chain says about an address the user is about to pay: whether
  * this account has paid it before, and whether it looks like an address it
- * has paid (or one of the user's own) without being it.
+ * has dealt with (paid, or received from), one of the user's own or a saved
+ * one, without being it.
  *
  * Every conclusion compares the full 32 bytes. The short form `7xKX…gAsU`
  * is for recognising an address, never for matching one: an attacker can
@@ -28,8 +29,14 @@ export type Relation =
 
 export interface KnownAddress {
   readonly address: string;
-  /** `paid`: from the history; `own`: one of the user's accounts; `saved`: one the user saved. */
-  readonly kind: 'paid' | 'own' | 'saved';
+  /**
+   * `paid`: paid from this account (the history); `own`: one of the user's
+   * accounts; `saved`: one the user saved; `counterparty`: in the history but
+   * never paid from this account (it sent money in, or received a zero-value
+   * transfer or one this account did not sign). A screen must not say "paid
+   * before" of a counterparty.
+   */
+  readonly kind: 'paid' | 'own' | 'saved' | 'counterparty';
 }
 
 export interface AddressMatch {
@@ -131,7 +138,13 @@ export function relationTo(recipient: string, history: Read<PaymentHistory>, own
 
 /**
  * The relation and the lookalike check for `recipient`, against the payment
- * history and the caller's own and saved addresses.
+ * history (addresses paid, then counterparties) and the caller's own and
+ * saved addresses.
+ *
+ * Counterparties are compared only when the recipient is not itself an
+ * address paid, one of the user's own or a saved one: anyone can send this
+ * account money, and a look-alike sender must not cast doubt on an address
+ * the account already knows.
  */
 export function checkRecipient(
   recipient: string,
@@ -148,6 +161,13 @@ export function checkRecipient(
     ...(history.status === 'ok' ? [{ address: history.value.vault, kind: 'own' as const }, ...paidAddresses(history.value)] : []),
     ...saved.map((address) => ({ address, kind: 'saved' as const })),
   ];
+  const isKnown = known.some((entry) => compareAddresses(recipient, entry.address).same);
+  if (history.status === 'ok' && !isKnown) {
+    const listed = new Set(known.map((entry) => entry.address));
+    for (const address of history.value.counterparties) {
+      if (!listed.has(address)) known.push({ address, kind: 'counterparty' });
+    }
+  }
   const found = findLookalike(recipient, known);
   if (found) return { recipient, relation, lookalike: found, scope };
   return { recipient, relation, lookalike: history.status === 'ok' ? { status: 'none' } : { status: 'unknown', reason: history.reason }, scope };

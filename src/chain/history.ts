@@ -7,6 +7,13 @@
  * counts (address poisoning works by sending it), and neither do failed or
  * zero-value transfers.
  *
+ * The other addresses the vault dealt with are kept apart, as
+ * counterparties: senders of SOL or tokens into it, and recipients of
+ * zero-value transfers or of transfers it did not sign. They are never
+ * "paid", but a recipient that looks like one of them is worth a warning.
+ * Tokens sent to one of the vault's token accounts show up only when the
+ * transaction lists the vault itself.
+ *
  * The history is read newest first and may stop short: `scanned` says how
  * many of the newest transactions were read without a gap, and `coverage`
  * whether that was all of them.
@@ -40,6 +47,19 @@ export interface PaymentHistory {
   readonly transfers: readonly OutgoingTransfer[];
   /** Token payments out of the vault whose recipient could not be named (the receiving account's owner is not in the transaction). */
   readonly unattributed: number;
+  /**
+   * Addresses the vault dealt with without paying them, newest first, each
+   * once: senders of money into it, recipients of zero-value transfers or of
+   * transfers it did not sign. An address may also be among those paid.
+   */
+  readonly counterparties: readonly string[];
+}
+
+/** What one transaction says about the vault. */
+export interface VaultTransfers {
+  readonly transfers: OutgoingTransfer[];
+  readonly unattributed: number;
+  readonly counterparties: string[];
 }
 
 export interface HistoryOptions {
@@ -105,47 +125,64 @@ function instructionsOf(tx: Obj): Obj[] {
 }
 
 /**
- * The payments out of `vault` in one transaction (`jsonParsed`): none when it
- * failed. `unattributed` counts token payments whose recipient is unknown.
+ * What one transaction (`jsonParsed`) says about `vault`: its payments out,
+ * the token payments out whose recipient is unknown (`unattributed`), and
+ * its counterparties. Nothing when the transaction failed.
  */
-export function outgoingTransfers(vault: string, signature: string, tx: unknown): { transfers: OutgoingTransfer[]; unattributed: number } {
-  const none = { transfers: [], unattributed: 0 };
-  if (!isObj(tx) || !isObj(tx.meta) || tx.meta.err !== null || typeof tx.slot !== 'number') return none;
+export function vaultTransfers(vault: string, signature: string, tx: unknown): VaultTransfers {
+  if (!isObj(tx) || !isObj(tx.meta) || tx.meta.err !== null || typeof tx.slot !== 'number') return { transfers: [], unattributed: 0, counterparties: [] };
   const blockTime = typeof tx.blockTime === 'number' ? tx.blockTime : null;
   const tokenAccounts = tokenAccountsOf(tx);
   const transfers: OutgoingTransfer[] = [];
   let unattributed = 0;
+  const counterparties = new Set<string>();
+  const note = (address: unknown) => {
+    if (typeof address === 'string' && address !== vault) counterparties.add(address);
+  };
   for (const instruction of instructionsOf(tx)) {
     const parsed = instruction.parsed;
     if (!isObj(parsed) || !isObj(parsed.info) || typeof parsed.type !== 'string') continue;
     const info = parsed.info;
     if (instruction.programId === SYSTEM_PROGRAM && parsed.type === 'transfer') {
-      const amount = positiveAmount(info.lamports);
-      if (info.source !== vault || typeof info.destination !== 'string' || info.destination === vault || amount === null) continue;
-      transfers.push({ signature, slot: tx.slot, blockTime, to: info.destination, asset: { kind: 'sol' }, amount });
+      if (info.source === vault) {
+        if (typeof info.destination !== 'string' || info.destination === vault) continue;
+        const amount = positiveAmount(info.lamports);
+        if (amount === null) note(info.destination);
+        else transfers.push({ signature, slot: tx.slot, blockTime, to: info.destination, asset: { kind: 'sol' }, amount });
+      } else if (info.destination === vault) {
+        note(info.source);
+      }
       continue;
     }
     if (TOKEN_PROGRAMS.has(instruction.programId as string) && TOKEN_TRANSFERS.has(parsed.type)) {
       if (typeof info.source !== 'string' || typeof info.destination !== 'string') continue;
       const sourceOwner = tokenAccounts.get(info.source)?.owner ?? null;
+      const destination = tokenAccounts.get(info.destination);
+      const destinationOwner = destination?.owner ?? null;
       // A payment by this account is one it signed: tokens moved out of its
       // token account by another authority (a delegate, or a mint's permanent
       // delegate) were not paid by it.
       const signedByVault = info.authority === vault || info.multisigAuthority === vault;
-      const fromVault = signedByVault && (sourceOwner === null || sourceOwner === vault);
+      const fromVaultAccount = sourceOwner === vault || (sourceOwner === null && signedByVault);
+      if (!fromVaultAccount) {
+        if (destinationOwner === vault) note(sourceOwner ?? info.authority ?? info.multisigAuthority);
+        continue;
+      }
+      if (destinationOwner === vault) continue;
       const amount = positiveAmount(parsed.type === 'transfer' ? info.amount : isObj(info.tokenAmount) ? info.tokenAmount.amount : undefined);
-      if (!fromVault || amount === null) continue;
-      const destination = tokenAccounts.get(info.destination);
-      if (!destination?.owner) {
+      if (!signedByVault || amount === null) {
+        note(destinationOwner);
+        continue;
+      }
+      if (destinationOwner === null) {
         unattributed++;
         continue;
       }
-      if (destination.owner === vault) continue;
-      const mint = typeof info.mint === 'string' ? info.mint : (destination.mint ?? tokenAccounts.get(info.source)?.mint ?? null);
-      transfers.push({ signature, slot: tx.slot, blockTime, to: destination.owner, asset: { kind: 'token', mint, tokenAccount: info.destination }, amount });
+      const mint = typeof info.mint === 'string' ? info.mint : (destination?.mint ?? tokenAccounts.get(info.source)?.mint ?? null);
+      transfers.push({ signature, slot: tx.slot, blockTime, to: destinationOwner, asset: { kind: 'token', mint, tokenAccount: info.destination }, amount });
     }
   }
-  return { transfers, unattributed };
+  return { transfers, unattributed, counterparties: [...counterparties] };
 }
 
 // ─── The history ────────────────────────────────────────────────────────────
@@ -169,7 +206,7 @@ const VERSION_TOO_LOW = -32015;
 const INVALID_PARAMS = -32602;
 const STOP_ON: ReadonlySet<ReadFailure> = new Set(['rate-limited', 'network', 'not-configured', 'refused']);
 
-type Slot = { kind: 'read'; transfers: OutgoingTransfer[]; unattributed: number } | { kind: 'failed-transaction' } | { kind: 'unread' };
+type Slot = ({ kind: 'read' } & VaultTransfers) | { kind: 'failed-transaction' } | { kind: 'unread' };
 
 /**
  * The vault's payments out, from its newest `maxSignatures` transactions, of
@@ -221,7 +258,7 @@ export async function readPaymentHistory(transport: Transport, vault: string, op
         if (tx === null) tx = await fetchOne(entry, 'confirmed');
         if (tx === null) throw new RpcReadError('upstream', 'transaction not found');
         if (!isObj(tx) || !isObj(tx.meta)) throw new RpcReadError('malformed', 'unexpected transaction');
-        slots[index] = { kind: 'read', ...outgoingTransfers(vault, entry.signature, tx) };
+        slots[index] = { kind: 'read', ...vaultTransfers(vault, entry.signature, tx) };
       } catch (error) {
         const reason = failureOf(error);
         firstFailure ??= reason;
@@ -243,6 +280,7 @@ export async function readPaymentHistory(transport: Transport, vault: string, op
       scanned,
       transfers: read.flatMap((slot) => slot.transfers),
       unattributed: read.reduce((sum, slot) => sum + slot.unattributed, 0),
+      counterparties: [...new Set(read.flatMap((slot) => slot.counterparties))],
     },
   };
 }

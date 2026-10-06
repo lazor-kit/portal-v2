@@ -3,10 +3,12 @@
  *
  *   readVault            the vault's SOL and token accounts (with delegates)
  *   readWalletAccounts   the wallet's authorities, sessions, deferred executions
- *   readPaymentHistory   payments out of the vault, with how much was read
+ *   readPaymentHistory   payments out of the vault and its other
+ *                        counterparties, with how much was read
  *   checkRecipient       relation ("Paid 3 times before", "First time paying",
  *                        "Not in your last N transactions", unknown) and the
- *                        lookalike check, from a history read
+ *                        lookalike check (addresses paid, counterparties, own
+ *                        and saved ones), from a history read
  *
  * Every read is `{ status: 'ok', value }` or `{ status: 'unavailable', reason }`.
  */

@@ -20,7 +20,6 @@ import {
   decodeSession,
   findLookalike,
   lookalikeLevel,
-  outgoingTransfers,
   paymentsTo,
   portalTransport,
   readPaymentHistory,
@@ -29,6 +28,7 @@ import {
   readWalletAccounts,
   relationTo,
   vaultAddress,
+  vaultTransfers,
   type Cluster,
   type PaymentHistory,
   type Read,
@@ -295,10 +295,10 @@ test('a failed transaction’s transfers are ignored even when its record shows 
     const fixture = signature in PAYMENTS.transactions ? PAYMENTS : REPEAT;
     const tx = fixture.transactions[signature];
     assert.notEqual(tx.meta.err, null);
-    assert.deepEqual(outgoingTransfers(fixture.vault, signature, tx), { transfers: [], unattributed: 0 }, signature);
+    assert.deepEqual(vaultTransfers(fixture.vault, signature, tx), { transfers: [], unattributed: 0, counterparties: [] }, signature);
     // A failed transaction keeps the inner transfers it ran before failing;
     // marked successful, the same record would show a payment.
-    const asIfSucceeded = outgoingTransfers(fixture.vault, signature, { ...tx, meta: { ...tx.meta, err: null } });
+    const asIfSucceeded = vaultTransfers(fixture.vault, signature, { ...tx, meta: { ...tx.meta, err: null } });
     if (asIfSucceeded.transfers.length > 0) recordedTransfers++;
   }
   assert.ok(recordedTransfers >= 5, `${recordedTransfers} failed transactions with transfers in their record`);
@@ -349,14 +349,15 @@ test('a token transfer the vault did not sign is not a payment by it, even out o
   const recipient = '3krsWk9RKYSYfw5uTBtgcSFvyyGPHhvan1dndYMwWNDw';
   const moved = { source: vaultTokens, sourceOwner: vault, destination: otherTokens, destinationOwner: recipient, amount: '1' };
 
-  // Moved by a delegate (a mint's permanent delegate, say): not a payment.
-  const byDelegate = outgoingTransfers(vault, 'sig', tokenTx(mint, [{ ...moved, authority: delegate }]));
-  assert.deepEqual(byDelegate, { transfers: [], unattributed: 0 });
-  const history: Read<PaymentHistory> = { status: 'ok', value: { vault, coverage: 'complete', scanned: 1, transfers: byDelegate.transfers, unattributed: 0 } };
+  // Moved by a delegate (a mint's permanent delegate, say): not a payment;
+  // the address it went to is a counterparty.
+  const byDelegate = vaultTransfers(vault, 'sig', tokenTx(mint, [{ ...moved, authority: delegate }]));
+  assert.deepEqual(byDelegate, { transfers: [], unattributed: 0, counterparties: [recipient] });
+  const history: Read<PaymentHistory> = { status: 'ok', value: { vault, coverage: 'complete', scanned: 1, ...byDelegate } };
   assert.deepEqual(checkRecipient(recipient, history).relation, { kind: 'first-time' });
 
   // Signed by the vault: a payment.
-  const byVault = outgoingTransfers(vault, 'sig', tokenTx(mint, [{ ...moved, authority: vault }]));
+  const byVault = vaultTransfers(vault, 'sig', tokenTx(mint, [{ ...moved, authority: vault }]));
   assert.deepEqual(byVault.transfers.map((t) => [t.to, t.amount]), [[recipient, 1n]]);
 });
 
@@ -367,6 +368,61 @@ test('zero-value transfers out and transfers in never count', async () => {
   // This vault sent BJRfv… zero lamports many times, and received 0.001 SOL from it.
   const check = checkRecipient('BJRfvkLaLEgnB8dWg6QJAekgdXM4MyRbdgrdwwqap3Wq', { status: 'ok', value: history });
   assert.deepEqual(check.relation, { kind: 'first-time' });
+});
+
+test('counterparties: senders into the vault and recipients of zero-value transfers, never counted as paid', async () => {
+  const wallet = ok(await readPaymentHistory(through(WALLET), WALLET.vault));
+  // BJRfv… sent this vault 0.001 SOL and was sent zero lamports by it.
+  assert.deepEqual(wallet.counterparties, ['BJRfvkLaLEgnB8dWg6QJAekgdXM4MyRbdgrdwwqap3Wq']);
+  // In these two it also sent money in, and was paid.
+  for (const fixture of [PAYMENTS, REPEAT]) {
+    const history = ok(await readPaymentHistory(through(fixture), fixture.vault));
+    assert.deepEqual(history.counterparties, ['BJRfvkLaLEgnB8dWg6QJAekgdXM4MyRbdgrdwwqap3Wq']);
+  }
+
+  const vault = REPEAT.vault;
+  const [sender, theirTokens, vaultTokens, mint] = [addr(21), addr(22), addr(23), addr(24)];
+  const dust = vaultTransfers(
+    vault,
+    'sig',
+    tokenTx(mint, [{ authority: sender, source: theirTokens, sourceOwner: sender, destination: vaultTokens, destinationOwner: vault, amount: '1' }], [
+      { source: addr(25), destination: vault, lamports: 1 },
+      { source: vault, destination: addr(26), lamports: 0 },
+    ]),
+  );
+  assert.deepEqual(dust, { transfers: [], unattributed: 0, counterparties: [sender, addr(25), addr(26)] });
+});
+
+test('the lookalike check compares counterparties too, without casting doubt on an address already paid', () => {
+  const vault = REPEAT.vault;
+  const paid = '7NDjLNCJ8F2ptQkVFdheXHbiYwuQM5TfLXwWzG6E8J92';
+  const sentIn = 'BJRfvkLaLEgnB8dWg6QJAekgdXM4MyRbdgrdwwqap3Wq';
+  const twinOfPaid = alter(paid, 3, -4);
+  const history: Read<PaymentHistory> = {
+    status: 'ok',
+    value: {
+      vault,
+      coverage: 'complete',
+      scanned: 3,
+      transfers: [{ signature: 's', slot: 1, blockTime: 1, to: paid, asset: { kind: 'sol' }, amount: 1n }],
+      unattributed: 0,
+      // A look-alike of the address paid sent something in; so did sentIn.
+      counterparties: [twinOfPaid, sentIn],
+    },
+  };
+
+  // Like an address that only ever sent money in: a counterparty, never "paid".
+  const likeSender = checkRecipient(alter(sentIn, 3, -4), history);
+  assert.deepEqual(likeSender.relation, { kind: 'first-time' });
+  assert.deepEqual(likeSender.lookalike, { status: 'found', level: 'danger', like: { address: sentIn, kind: 'counterparty' }, prefix: 3, suffix: 3 });
+
+  // Paying the twin: it looks like the address paid.
+  assert.deepEqual(checkRecipient(twinOfPaid, history).lookalike, { status: 'found', level: 'danger', like: { address: paid, kind: 'paid' }, prefix: 3, suffix: 3 });
+  // Paying the address paid: the twin that sent something in is not held against it.
+  assert.deepEqual(checkRecipient(paid, history).lookalike, { status: 'none' });
+  // Nor against a saved address.
+  const saved = alter(sentIn, 10);
+  assert.deepEqual(checkRecipient(saved, history, { saved: [saved] }).lookalike, { status: 'none' });
 });
 
 test('v1 transactions are read: the client asks for version 1 once the RPC says it is needed', async () => {
