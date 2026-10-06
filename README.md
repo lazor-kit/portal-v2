@@ -182,7 +182,7 @@ popup should use `same-origin-allow-popups` if they set COOP.
 
 | Route | Purpose |
 |---|---|
-| `POST /api/rpc?cluster=mainnet\|devnet` | Solana JSON-RPC for the preview: `getMultipleAccounts`, `simulateTransaction`, `getLatestBlockhash`, `isBlockhashValid` only; one request of at most 64 KiB, from the portal's own pages |
+| `POST /api/rpc?cluster=mainnet\|devnet` | Solana JSON-RPC, read-only: the transaction preview and the chain reads pages show (below); one request of at most 64 KiB, from the portal's own pages, within a budget per client |
 | `POST /api/telemetry` | one decision event, logged as a JSON line; listed fields only |
 | `POST /api/csp-report` | CSP reports, logged as origins only |
 
@@ -190,16 +190,71 @@ popup should use `same-origin-allow-popups` if they set COOP.
 (whatever domain the deployment is reached on, a staging domain included),
 the deployment's own Vercel URLs, and `PORTAL_ORIGIN`.
 
+### `/api/rpc`
+
+The cluster comes from the request URL, and picks the upstream. Only these
+methods are forwarded, each with its parameters checked
+(`api/rpc.ts`); nothing that writes, signs or airdrops:
+
+| Method | Accepted |
+|---|---|
+| `getMultipleAccounts` | 1 to 100 addresses, `base64` |
+| `simulateTransaction` | a base64 transaction of at most 2048 characters, `sigVerify` off, at most 128 accounts returned |
+| `getLatestBlockhash`, `isBlockhashValid` | commitment and `minContextSlot` only |
+| `getAccountInfo` | one address, `base64`, optional `dataSlice` |
+| `getBalance` | one address |
+| `getTokenAccountsByOwner` | one owner, by mint or by program (SPL Token or Token-2022 only), `base64` or `jsonParsed` |
+| `getProgramAccounts` | the LazorKit v2 program of the request's cluster only, `base64`, with exactly two filters: one account type (Authority, Session or DeferredExec) and one wallet at that type's wallet offset |
+| `getSignaturesForAddress` | one address, at most 1000 signatures, `confirmed` or `finalized` |
+| `getTransaction` | one signature, `json`, `jsonParsed` or `base64`, transaction version 0 or 1, `confirmed` or `finalized` |
+
+- **Budget.** Each client address (an IPv6 client by its /64) has a budget
+  of request cost: 300, refilled at 5 a second. A program listing costs 10,
+  a signature list 5, a simulation or token listing 2, anything else 1.
+  Past it, the route answers 429 with `Retry-After` and calls nothing. The
+  budget lives in the memory of the instance serving the request: it slows a
+  loop, it does not replace a rate limit at the edge.
+- **Caching.** Every answer is `Cache-Control: no-store`. A finalized
+  transaction cannot change, so the instance keeps up to 8 MiB of them and
+  answers a repeat without the upstream.
+- **Limits.** 8 s for the upstream to answer, 4 MiB for its answer.
+- **Logs.** One line per request: method, cluster, status, duration. Never
+  the upstream URL, a client address, or a request body.
+
 Environment variables (Production and Preview):
 
 | Name | Notes |
 |---|---|
-| `RPC_MAINNET_URL` | mainnet upstream, with its key; mark it sensitive; mainnet previews are unavailable without it |
-| `RPC_DEVNET_URL` | devnet upstream, a keyed endpoint; required: on a Vercel production or preview deployment, devnet previews are unavailable without it (the public devnet RPC rate-limits the platform's shared addresses). Locally it defaults to `https://api.devnet.solana.com` |
+| `RPC_MAINNET_URL` | mainnet upstream, with its key; mark it sensitive; mainnet reads are unavailable without it |
+| `RPC_DEVNET_URL` | devnet upstream, a keyed endpoint; required: on a Vercel production or preview deployment, devnet reads are unavailable without it (the public devnet RPC rate-limits the platform's shared addresses). Locally it defaults to `https://api.devnet.solana.com` |
 | `PORTAL_ORIGIN` | optional further origins allowed to call `/api/rpc` and `/api/telemetry`, comma-separated |
+
+Both upstreams must serve `getProgramAccounts` and transaction history
+(`getSignaturesForAddress`, `getTransaction`, version 1 transactions
+included): public endpoints often refuse or throttle these.
 
 Never put a secret in a `VITE_*` variable: those are compiled into the page.
 Rate-limit `/api/rpc` and `/api/telemetry` at the edge.
+
+### Chain reads for display (`src/chain`)
+
+Pages read the chain only through `/api/rpc`. Each read answers
+`{ status: 'ok', value }` or `{ status: 'unavailable', reason }` (`not-configured`,
+`rate-limited`, `timeout`, `upstream`, `refused`, `network`, `malformed`), and never
+fills in a value it could not read.
+
+| Read | What it returns |
+|---|---|
+| `readVault` | the vault's SOL, and its SPL Token and Token-2022 accounts with any delegate and delegated amount |
+| `readWalletAccounts` | the wallet's authorities (role, key, policy bytes), sessions (key, expiry slot, limit bytes) and deferred executions; accounts of a newer layout are counted, not decoded |
+| `readPaymentHistory` | payments out of the vault: successful, non-zero SOL transfers from it and token transfers out of its token accounts, by the address paid (for tokens, the owner of the receiving account). Incoming transfers, failed transactions and zero-value transfers never count. It lists the newest 1000 signatures and reads at most 100 successful transactions, and says how many of the newest it read without a gap (`scanned`) and whether that was all of them (`coverage`) |
+| `paymentsTo` | from a history: the payments to one address, newest first |
+| `checkRecipient` | from a history: the relation (`paid` with a count and the last time, `first-time`, `not-in-recent` with how many were read, `own-account`, or `unknown`), and the closest lookalike among addresses paid, the user's own and saved ones |
+
+Addresses are compared on their full 32 bytes. A lookalike shares the ends of
+a known address without being it: at least 3 leading and 3 trailing
+characters is `danger`; only the first 4 or only the last 4 is `caution`.
+`useRecipientCheck` (`src/hooks`) runs the check for a payment screen.
 
 Telemetry events carry the requester's origin (or `scheme://`), the channel,
 the evidence, the request kind, the outcome and its reason, and whether the
@@ -249,6 +304,9 @@ Node 24 and pnpm 10.26 (`packageManager` and `.nvmrc`).
 pnpm install --frozen-lockfile
 pnpm dev               # https://localhost:3000, with /api served locally
 pnpm test              # unit tests (node --test, no extra dependencies)
+node scripts/record-chain-fixtures.ts
+                       # re-record the devnet answers the chain-read tests replay
+                       # (public devnet RPC, or RECORD_RPC_URL; never written to a file)
 pnpm --dir compat install --frozen-lockfile && pnpm --dir compat test
                        # released SDKs (web 2.0.1, 2.1.0, 3.3.0) reading the portal's replies
 pnpm typecheck:test
