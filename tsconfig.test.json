@@ -12,7 +12,9 @@
   },
   "include": [
     "src/security",
+    "src/chain",
     "test",
-    "api"
+    "api",
+    "scripts/record-chain-fixtures.ts"
   ]
 }
