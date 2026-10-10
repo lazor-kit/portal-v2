@@ -126,10 +126,10 @@ test('mainnet goes to RPC_MAINNET_URL; devnet defaults to the public devnet RPC;
 
 // ─── Allowlist ──────────────────────────────────────────────────────────────
 
-test('only the four read-only methods pass, one request at a time', async () => {
+test('only the listed read-only methods pass, one request at a time', async () => {
   const calls: Call[] = [];
   const key = Keypair.generate().publicKey.toBase58();
-  for (const method of ['sendTransaction', 'getProgramAccounts', 'requestAirdrop', 'getBalance', 'getAccountInfo']) {
+  for (const method of ['sendTransaction', 'requestAirdrop', 'simulateBundle', 'getLargestAccounts', 'getBlock', 'getSignatureStatuses', 'getTokenLargestAccounts', 'getClusterNodes']) {
     const r = await handleRpc(post({ jsonrpc: '2.0', id: 1, method, params: [key] }), deps(upstream(calls)));
     assert.equal(r.status, 400, method);
     assert.match(await r.text(), /method not allowed/);
