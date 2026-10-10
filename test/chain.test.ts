@@ -156,7 +156,7 @@ test('recorded v2 accounts decode: an Admin key, a passkey Owner, sessions with 
   assert.deepEqual(sessions.map((s) => s?.actions.length).sort(), [0, 51]);
   for (const session of sessions) {
     assert.equal(session?.wallet, WALLET.wallet);
-    assert.ok((session?.expiresAtSlot ?? 0n) > 0n);
+    assert.ok((session?.expiresAt ?? 0n) > 0n);
     assert.ok(addressBytes(session!.sessionKey));
   }
 });
@@ -197,7 +197,7 @@ test('a wallet’s authorities, sessions and deferred executions, through the ro
   const accounts = ok(await readWalletAccounts(through(WALLET, seen), 'devnet', WALLET.wallet));
   assert.deepEqual(accounts.authorities.map((a) => a.role).sort(), ['admin', 'owner']);
   assert.equal(accounts.sessions.length, 2);
-  assert.ok(accounts.sessions[0].expiresAtSlot <= accounts.sessions[1].expiresAtSlot);
+  assert.ok(accounts.sessions[0].expiresAt <= accounts.sessions[1].expiresAt);
   assert.equal(accounts.deferred.length, 0);
   assert.equal(accounts.unreadable, 0);
   assert.equal(accounts.slot, Math.min(...Object.values(WALLET.accounts).map((l) => l.context.slot)));

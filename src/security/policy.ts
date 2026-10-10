@@ -4,6 +4,7 @@
  *
  * Loaded from config/portal-policy.json at build time.
  */
+import type { ApprovalRequest } from '../approval/envelope.ts';
 import type { ClassifiedChallenge, RefusalReason } from './challenge.ts';
 import { destinationLabel, type RedirectDecision, type RedirectPolicy } from './redirect.ts';
 import type { RegisteredApp, Registry } from './registry.ts';
@@ -73,8 +74,16 @@ export type Decision =
     }
   | { readonly outcome: 'refuse'; readonly reason: DecisionReason };
 
-/** What is to be signed: a classified challenge, or a sign-in with no challenge from the request. */
-export type Subject = ClassifiedChallenge | { readonly kind: 'sign-in' };
+/**
+ * What is to be signed: a classified challenge, a sign-in with no challenge
+ * from the request, or a typed request whose envelope recomputes to the
+ * challenge sent (`challenge`); a typed request is signed with the slot and
+ * counter picked at Approve, never with `challenge` itself.
+ */
+export type Subject =
+  | ClassifiedChallenge
+  | { readonly kind: 'sign-in' }
+  | { readonly kind: 'typed'; readonly request: ApprovalRequest; readonly challenge: Uint8Array };
 
 const GATED: Partial<Record<Subject['kind'], keyof PortalPolicy['gates']>> = {
   'message-without-text': 'messageWithoutText',
@@ -137,6 +146,9 @@ export function decide(input: {
       return { outcome: 'refuse', reason: 'kind-denied' };
     }
   }
+  // A typed request shows what is signed, so no gate holds it back; an app
+  // that may not ask for program challenges may not ask for these either.
+  if (challenge.kind === 'typed' && app?.programChallenges === false) return { outcome: 'refuse', reason: 'kind-denied' };
   if (challenge.kind === 'message-without-text') warnings.push('undisplayable-message');
   if (challenge.kind === 'transaction') warnings.push('preview-not-verified');
   if (challenge.kind === 'approval') warnings.push('content-not-shown');

@@ -23,6 +23,25 @@ export const REFUSAL_TEXT: Record<string, { title: string; detail: string }> = {
   "requires-registered-app": { title: "App not registered", detail: "Only registered apps can request this kind of approval." },
   "credential-missing": { title: "No passkey named", detail: "The request does not say which passkey should sign it." },
   "unknown-action": { title: "Request not recognised", detail: "The portal doesn't know what this request is asking for." },
+  "typed-malformed": {
+    title: "Request not readable",
+    detail: "The typed request in the URL fragment is not a valid v1 request, or the fragment changed after the page loaded.",
+  },
+  "typed-unsupported": { title: "Request not recognised", detail: "This portal does not know this typed request's version or kind." },
+  "challenge-mismatch": {
+    title: "Request does not match",
+    detail: "The typed request does not recompute to the challenge in `message`, or names another passkey or authority.",
+  },
+  "wrong-network": {
+    title: "Network not supported",
+    detail: "The request's cluster or program is not the one this portal is configured for, or the deployed program is not the configured build.",
+  },
+  "request-invalid": { title: "Request would fail", detail: "The chain state says the program would refuse this request." },
+  "stale-counter": {
+    title: "Request out of date",
+    detail: "The portal's node has not yet seen the passkey counter the request was prepared with. Prepare the request again.",
+  },
+  "chain-unavailable": { title: "Network unavailable", detail: "The portal could not read the chain state it checks before showing this request." },
 }
 
 export function refusalText(reason: string): { title: string; detail: string } {

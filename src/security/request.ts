@@ -3,6 +3,8 @@
  * to show, the decision, and the exact bytes a passkey would sign. The page
  * signs `signBytes` and nothing else.
  */
+import type { FragmentRead } from '../approval/envelope.ts';
+import { checkTypedRequest } from '../typed/request.ts';
 import { classifyChallenge } from './challenge.ts';
 import { decodeBase64Strict } from './encoding.ts';
 import { challengeRequestOf, type PortalRequest } from './params.ts';
@@ -14,7 +16,10 @@ import type { Requester } from './requester.ts';
 export interface Evaluation {
   readonly subject: Subject | null;
   readonly decision: Decision;
-  /** The WebAuthn challenge: the classified bytes; null for a sign-in with no proof (a random one is used). */
+  /**
+   * The WebAuthn challenge: the classified bytes; null for a sign-in with no
+   * proof (a random one is used) and for a typed request (computed at Approve).
+   */
   readonly signBytes: Uint8Array | null;
   /** The passkey a sign request names; null on connect. */
   readonly credential: Uint8Array | null;
@@ -43,13 +48,21 @@ export function evaluateRequest(input: {
   redirect?: RedirectDecision;
   registry: Registry;
   policy: PortalPolicy;
+  /** The URL fragment as read at load, and the URL's length then. */
+  typed?: { readonly fragment: FragmentRead; readonly urlLength: number };
 }): Evaluation {
-  const { request, requester, redirect, registry, policy } = input;
+  const { request, requester, redirect, registry, policy, typed } = input;
   if (!request.action) return { subject: null, decision: { outcome: 'refuse', reason: 'unknown-action' }, signBytes: null, credential: null };
 
   let subject: Subject;
   let credential: Uint8Array | null = null;
-  if (request.action === 'connect') {
+  if (typed && typed.fragment.kind !== 'none') {
+    // Once a fragment carries a request, nothing else is read: never the legacy screen.
+    const checked = checkTypedRequest(typed.fragment, request, typed.urlLength);
+    subject = checked.ok ? { kind: 'typed', request: checked.request, challenge: checked.challenge } : { kind: 'refused', reason: checked.code };
+    credential = decodeBase64Strict(request.credentialId ?? '');
+    if (credential && credential.length === 0) credential = null;
+  } else if (request.action === 'connect') {
     subject = connectSubject(request, policy);
   } else {
     subject = classifyChallenge(challengeRequestOf(request)!);
@@ -61,6 +74,6 @@ export function evaluateRequest(input: {
   if (decision.outcome === 'show' && request.action === 'sign' && !credential) {
     return { subject, decision: { outcome: 'refuse', reason: 'credential-missing' }, signBytes: null, credential: null };
   }
-  const signBytes = decision.outcome === 'show' && subject.kind !== 'sign-in' && subject.kind !== 'refused' ? subject.challenge : null;
+  const signBytes = decision.outcome === 'show' && subject.kind !== 'sign-in' && subject.kind !== 'refused' && subject.kind !== 'typed' ? subject.challenge : null;
   return { subject, decision, signBytes, credential };
 }
