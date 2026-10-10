@@ -35,10 +35,15 @@ function enforce(policy) {
   };
 }
 
-async function buildPortal(name, policy) {
+/**
+ * One portal build in e2e/.out/portal-<name>, with `policy`, `registry` and,
+ * when given, `programs` (config/programs.json) in place of the committed files.
+ */
+export async function buildPortal(name, policy, { registry: registryJson = REGISTRY, programs } = {}) {
   const dir = join(OUT, `config-${name}`);
   mkdirSync(dir, { recursive: true });
-  const registry = parseRegistry(REGISTRY);
+  const registry = parseRegistry(registryJson);
+  if (programs) writeFileSync(join(dir, 'programs.json'), JSON.stringify(programs, null, 2));
   const checked = parsePolicy(policy);
   writeFileSync(join(dir, 'portal-policy.json'), JSON.stringify(checked, null, 2));
   writeFileSync(join(dir, 'registry.json'), JSON.stringify(registry, null, 2));
@@ -52,6 +57,7 @@ async function buildPortal(name, policy) {
       alias: [
         { find: /^\.\.\/config\/portal-policy\.json$/, replacement: join(dir, 'portal-policy.json') },
         { find: /^\.\.\/config\/registry\.json$/, replacement: join(dir, 'registry.json') },
+        ...(programs ? [{ find: /^\.\.\/config\/programs\.json$/, replacement: join(dir, 'programs.json') }] : []),
       ],
     },
   });

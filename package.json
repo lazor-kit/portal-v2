@@ -20,6 +20,7 @@
     "headers": "node scripts/gen-headers.mjs",
     "headers:check": "node scripts/gen-headers.mjs --check",
     "e2e": "node e2e/run.mjs",
+    "e2e:typed": "node e2e/typed.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

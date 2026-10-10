@@ -4,6 +4,15 @@
 
 ### For integrators
 
+- Typed requests (v1): CreateSession, RevokeSession and RemoveAuthority sent
+  with `#/?lk1=<request>` after the usual query are shown as what they do
+  ("0.02 SOL + 5 USDC", "No total limit on SOL", "Stop this spending
+  permission", "Remove a device"), checked against the signed challenge and
+  against the chain, and signed with the slot and counter the portal picks
+  when the person approves. The signature reply adds a `typed` block
+  (`typed*` parameters on the redirect channel) with that slot and counter.
+  Requests without a fragment are handled as before.
+
 - The portal signs only recognised challenge formats: LazorKit signed
   messages (shown as their text, which must match the challenge),
   ownership proofs, and 32-byte program challenges (with or without a

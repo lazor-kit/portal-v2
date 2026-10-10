@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>LazorKit portal typed e2e dApp</title>
+</head>
+<body>
+  <h1>typed e2e dApp</h1>
+  <p id="status">loading</p>
+  <script>
+    // Opens the portal URL it is given in a frame, as the SDK's dialog does,
+    // and resolves with the first message that frame posts (or a timeout).
+    // Only the run's own portal is ever framed.
+    const PORTAL = new URLSearchParams(location.search).get('portal');
+    window.lkt = {
+      open(url, timeoutMs = 180000) {
+        if (!url.startsWith(`${PORTAL}/`)) throw new Error('not the run portal');
+        return new Promise((resolve) => {
+          const iframe = document.createElement('iframe');
+          iframe.allow = `publickey-credentials-get ${PORTAL}; publickey-credentials-create ${PORTAL}`;
+          iframe.id = 'typed';
+          iframe.style.cssText = 'width:420px;height:720px;border:0';
+          const done = (value) => {
+            window.removeEventListener('message', onMessage);
+            clearTimeout(timer);
+            iframe.remove();
+            resolve(value);
+          };
+          const onMessage = (e) => {
+            if (e.source === iframe.contentWindow) done({ origin: e.origin, data: e.data });
+          };
+          window.addEventListener('message', onMessage);
+          const timer = setTimeout(() => done({ timeout: true }), timeoutMs);
+          iframe.src = url;
+          document.body.appendChild(iframe);
+        });
+      },
+      /** Changes the open frame's fragment: a navigation within the page, no reload. */
+      retarget(hash) {
+        const iframe = document.getElementById('typed');
+        iframe.src = iframe.src.split('#')[0] + hash;
+      },
+    };
+    document.getElementById('status').textContent = 'ready';
+  </script>
+</body>
+</html>

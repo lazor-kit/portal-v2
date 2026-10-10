@@ -24,6 +24,9 @@ system browser and gets the result back through a redirect.
 Nothing in the URL is trusted as is: the challenge is classified, the
 requester comes from the browser, and a redirect destination is checked.
 
+A typed request (below) adds a URL fragment, `#/?lk1=<base64url(UTF-8 JSON)>`,
+to the same query. The fragment never reaches a server or a `Referer`.
+
 ### What is signed
 
 The portal signs only these challenge formats (`src/security/challenge.ts`):
@@ -37,10 +40,60 @@ The portal signs only these challenge formats (`src/security/challenge.ts`):
 
 Anything else is refused with a reason, and the app is told why; the person
 reads what happened in plain words, and that their passkey signed nothing.
-The passkey always signs the classified bytes, with the passkey
-`credentialId` names. Control, zero-width and bidirectional characters in a
+The passkey always signs the classified bytes (for a typed request, the
+challenge recomputed with the slot and counter picked at Approve), with the
+passkey `credentialId` names. Control, zero-width and bidirectional characters in a
 message are shown as labelled markers ("reversed text"), never applied, with
 a caution; their code points are listed in Details.
+
+### Typed requests
+
+A typed request says what the program instruction does, so the portal can
+show it and check that the passkey signs exactly that (`src/approval`,
+`src/typed`). Version 1 covers CreateSession, RevokeSession and
+RemoveAuthority:
+
+```jsonc
+{ "v": 1, "kind": "createSession",        // | "revokeSession" | "removeAuthority"
+  "cluster": "devnet", "programId": "57bT…", "wallet": "…", "authority": "…",
+  "credentialId": "<base64url>", "payer": "…", "counter": 7,
+  "preparedSlot": "412388000", "minContextSlot": 412387990,   // optional
+  "args": { "sessionKey": "…", "expiresAt": "<unix seconds>", "actions": "<base64url>" } }
+// revokeSession: args { session, refund }; removeAuthority: args { target, refund }
+```
+
+- The schema is strict: exact keys, base58 addresses, decimal u64 strings,
+  unpadded base64url, the actions buffer exactly as the program receives it
+  (decoded with the program's own rules). At most 8,192 characters in the
+  fragment and 16,384 in the URL.
+- The fragment is read once, before the router starts, then removed from the
+  address bar; a `hashchange` after that refuses the request.
+- On load, the envelope with its own `preparedSlot` and `counter` must
+  recompute to the `message` the SDK sent, `credentialId` must be the
+  query's, and `authority` must be that passkey's on the wallet. Then the
+  portal reads the chain (`src/typed/reads.ts`): the binary (its last-deploy
+  slot against `config/programs.json`), the wallet, the authority, the Clock,
+  the session or the authority to remove, the mints the limits name, and the
+  vault when a "could spend all" line needs it. What the program would refuse
+  is refused here.
+- While the screen is open the portal reads the authority's counter and the
+  Clock once a second. Approve signs with that slot and the chain's counter
+  + 1 (never below the SDK's), picked inside the click: the program's
+  150-slot window starts when the person approves, not when the app
+  prepared. The reply adds `typed: { v, kind, slot, counter, sysvarIxIndex }`
+  (`typedV`, `typedKind`, `typedSlot`, `typedCounter`, `typedSysvarIx` on
+  the redirect channel); the SDK recomputes the challenge from its own inputs
+  with them before it sends anything.
+- Screens: `session-create` ("Spending limit", the totals, "Fernway can spend
+  this to anyone, without asking you.", when it ends and where to stop it),
+  `session-no-total` (a caution block: "No total limit on SOL" and how much
+  could go), `session-no-limits` (a danger block, Cancel solid, a
+  confirmation), `session-stop`, `device-remove` and `key-remove`. Details
+  opens with "Matches what your passkey signs".
+- Refusals: `typed-malformed`, `typed-unsupported`, `challenge-mismatch`,
+  `wrong-network`, `request-invalid`, `stale-counter`, `chain-unavailable`
+  (with "Try again"). A request that carries a fragment never falls back to
+  the screen for a change LazorKit can't show.
 
 ### Who gets the answer
 
@@ -162,8 +215,8 @@ and counts the sender's origin as evidence.
 
 ## Configuration
 
-Both files are checked when the app is built and loaded
-(`src/security/config.ts`); a change is a commit and a deploy.
+The files are checked when the app is built and loaded
+(`src/security/config.ts`, `src/typed/programs.ts`); a change is a commit and a deploy.
 
 ### `config/portal-policy.json`
 
@@ -183,6 +236,21 @@ Both files are checked when the app is built and loaded
 The `enforce` settings are `transaction` and `approval` at `registered`,
 both redirect rules at `deny`, `framing.mode` at `enforce`, and
 `contentPolicy` at `enforce`.
+
+### `config/programs.json`
+
+```json
+{ "devnet": { "programId": "57bTNWqtYTJbWuLWASKo6GqUTAK6oFDUR5c6hEc6V8nv", "lastDeploySlot": 509521792,
+              "features": ["wallet-bound-challenge", "d13", "nonowner-invariants"] } }
+```
+
+The LazorKit program a typed request may name on each cluster, the slot its
+binary was last deployed at, and what that binary does
+(`wallet-bound-challenge`, `d13`, `nonowner-invariants`, `time-expiry`). A
+claim that depends on the binary is made only when the feature is listed and
+the chain's program data says the binary is that deploy. A cluster that is
+not listed refuses typed requests (`wrong-network`); so does CreateSession
+without `time-expiry`. Change this file in the same release as the program.
 
 ### `config/registry.json`
 
@@ -307,7 +375,7 @@ fills in a value it could not read.
 | Read | What it returns |
 |---|---|
 | `readVault` | the vault's SOL, and its SPL Token and Token-2022 accounts with any delegate and delegated amount |
-| `readWalletAccounts` | the wallet's authorities (role, key, policy bytes), sessions (key, expiry slot, limit bytes) and deferred executions; accounts of a newer layout are counted, not decoded |
+| `readWalletAccounts` | the wallet's authorities (role, key, policy bytes), sessions (key, expiry: Unix seconds on a time-expiry binary, a slot before it; limit bytes) and deferred executions; accounts of a newer layout are counted, not decoded |
 | `readPaymentHistory` | payments out of the vault: successful, non-zero SOL transfers from it and token transfers it signed out of its token accounts, by the address paid (for tokens, the owner of the receiving account). Incoming transfers, failed transactions, zero-value transfers and transfers it did not sign never count; their other parties are listed apart as `counterparties`. It lists the newest 1000 signatures and reads at most 100 successful transactions, and says how many of the newest it read without a gap (`scanned`) and whether that was all of them (`coverage`) |
 | `paymentsTo` | from a history: the payments to one address, newest first |
 | `checkRecipient` | from a history: the relation (`paid` with a count and the last time, `first-time`, `not-in-recent` with how many were read, `own-account`, or `unknown`), and the closest lookalike among addresses paid, the user's own and saved ones, then counterparties (`none` only when the whole history was read; `none-in-recent` otherwise) |
@@ -402,3 +470,19 @@ pnpm e2e
 ```
 
 Results go to `e2e/.out/results.json`, screenshots to `e2e/.out/screens/`.
+
+`e2e/typed.mjs` runs typed requests end to end on a local validator: a wallet
+whose passkey the virtual authenticator holds, requests prepared with
+`@lazorkit/sdk-legacy` and opened as the SDK opens them, the screen read,
+Approve pressed (once after waiting more than 150 slots), and the transaction
+finalized with the portal's slot and counter and sent. It also covers a
+counter that moves before Approve, the caution and danger screens, a forged
+envelope, a changed fragment and an unconfigured network. The validator runs
+on its own ports and ledger, and is stopped and deleted at the end.
+
+```bash
+LAZORKIT_SO=<lazorkit-protocol devnet build>/lazorkit_program.so \
+LAZORKIT_INIT_AUTHORITY=<lazorkit-protocol>/keys/devnet-init-authority.json \
+TYPED_LEDGER=<an empty directory> PLAYWRIGHT_MODULE=/path/to/node_modules/playwright \
+pnpm e2e:typed
+```
