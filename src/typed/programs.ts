@@ -3,8 +3,9 @@
  * was last deployed at, and what that binary does. Binary-dependent claims
  * ("Your account blocks it", Unix-time expiry) are made only when the feature
  * is listed here and the chain agrees the deployed binary is this one (the
- * program data's last-deploy slot equals `lastDeploySlot`). The devnet
- * upgrade and the change to this file ship together.
+ * program data's last-deploy slot equals `lastDeploySlot`). That slot is
+ * known only once an upgrade lands: upgrade, read it, update this file and
+ * deploy the portal, then publish SDKs that rely on the new binary.
  */
 import { LAZORKIT_PROGRAM } from '../chain/layout.ts';
 import type { ApprovalCluster } from '../approval/constants.ts';

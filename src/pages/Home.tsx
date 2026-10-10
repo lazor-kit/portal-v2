@@ -142,7 +142,9 @@ export default function Home() {
 
   // A typed request: its chain state and snapshot, read while it is shown.
   const typedRequest = decision.outcome === "show" && subject?.kind === "typed" ? subject.request : null
-  const typed = useTyped(typedRequest, typedRequest !== null)
+  // The snapshots' verdict only matters while Approve can still be tapped: not
+  // while the passkey prompt is open (the click bound it), nor after the answer.
+  const typed = useTyped(typedRequest, typedRequest !== null, phase !== "review" && phase !== "cancelled")
   const [tampered, setTampered] = useState(fragmentTampered)
   useEffect(() => onFragmentTampered(() => setTampered(true)), [])
   const typedRefusal: { code: string; reason?: string } | null =

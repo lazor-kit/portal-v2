@@ -282,12 +282,17 @@ export interface Snapshot {
   readonly at: number;
 }
 
-/** The snapshot: one `getMultipleAccounts` of the authority and the Clock. Null when the answer isn't one. */
+/**
+ * The snapshot: one `getMultipleAccounts` of the authority and the Clock.
+ * Null when the signing authority is no longer this wallet's (removed while
+ * the screen is open); a read that fails, or a Clock that isn't one, throws.
+ */
 export async function readSnapshot(transport: Transport, req: ApprovalRequest, now: () => number): Promise<Snapshot | null> {
   const { accounts } = await multipleAccounts(transport, [req.authority, CLOCK_SYSVAR], {});
   const [authorityAcc, clockAcc] = accounts;
-  const authority = authorityAcc && authorityAcc.owner === req.programId ? decodeAuthority(req.authority, authorityAcc.data) : null;
   const clock = clockAcc ? decodeClock(clockAcc.data) : null;
-  if (!authority || !clock || authority.wallet !== req.wallet) return null;
+  if (!clock) throw malformed('clock');
+  const authority = authorityAcc && authorityAcc.owner === req.programId ? decodeAuthority(req.authority, authorityAcc.data) : null;
+  if (!authority || authority.wallet !== req.wallet) return null;
   return { counter: authority.counter, slot: clock.slot, unixTimestamp: clock.unixTimestamp, at: now() };
 }

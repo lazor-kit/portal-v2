@@ -20,15 +20,25 @@ export function formatUnits(amount: bigint, decimals: number): string {
 
 export const LAMPORTS_DECIMALS = 9;
 
-/** A window in seconds, after an amount: "a day", "an hour", "every 3 days", "every 90 minutes". */
+/**
+ * A window in seconds, after an amount: "a day", "an hour", "every minute",
+ * "every second", "every 3 days", "every 90 minutes".
+ */
 export function windowPhrase(seconds: bigint): string {
   if (seconds === 86_400n) return 'a day';
   if (seconds === 604_800n) return 'a week';
   if (seconds === 3_600n) return 'an hour';
+  if (seconds === 60n) return 'every minute';
+  if (seconds === 1n) return 'every second';
   if (seconds % 86_400n === 0n) return `every ${seconds / 86_400n} days`;
   if (seconds % 3_600n === 0n) return `every ${seconds / 3_600n} hours`;
   if (seconds % 60n === 0n) return `every ${seconds / 60n} minutes`;
   return `every ${seconds} seconds`;
+}
+
+/** A window a binary without Unix-time expiry measures in slots: "every slot", "every 216,000 slots". */
+export function slotWindowPhrase(slots: bigint): string {
+  return slots === 1n ? 'every slot' : `every ${slots.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')} slots`;
 }
 
 export interface Clock {

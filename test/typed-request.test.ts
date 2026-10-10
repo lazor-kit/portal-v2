@@ -11,7 +11,7 @@ import { messageFor, redirectUrlFor } from '../src/security/reply.ts';
 import { evaluateRequest } from '../src/security/request.ts';
 import { refusalScreen, SIGNED_NOTHING } from '../src/security/refusal-screen.ts';
 import type { Requester } from '../src/security/requester.ts';
-import { bindAtApprove, MAX_SNAPSHOT_AGE_MS, typedReply } from '../src/typed/approve.ts';
+import { bindAtApprove, MAX_BEHIND_MS, MAX_SNAPSHOT_AGE_MS, snapshotVerdict, typedReply } from '../src/typed/approve.ts';
 import { captureFragment, capturedFragment, fragmentTampered, onFragmentTampered } from '../src/typed/fragment.ts';
 import { parsePrograms } from '../src/typed/programs.ts';
 import { readSnapshot, readTypedChain } from '../src/typed/reads.ts';
@@ -272,4 +272,30 @@ test('a token named without a total: the vault is read for "could spend all"', a
   const r = await read(w);
   assert.ok(r.ok && r.view.holdings && r.view.holdings.lamports === 1_250_000_000n);
   assert.ok(w.chain.calls.some((c) => c.method === 'getBalance'));
+});
+
+test('snapshots that stop: the screen refuses instead of waiting forever', async () => {
+  const t = { startedAt: 0, lastGoodAt: null, goneSince: null, behindSince: null };
+  assert.deepEqual(snapshotVerdict(t, MAX_BEHIND_MS), { kind: 'ok' });
+  // No usable answer since the screen opened (reads failing, a rate limit): chain-unavailable, which offers Try again.
+  const down = snapshotVerdict(t, MAX_BEHIND_MS + 1);
+  assert.equal(down.kind === 'refuse' && down.code, 'chain-unavailable');
+  assert.equal(refusalScreen('chain-unavailable', 'Fernway').retry, true);
+  // Answers stopped after a good one.
+  assert.deepEqual(snapshotVerdict({ ...t, lastGoodAt: 5000 }, 5000 + MAX_BEHIND_MS), { kind: 'ok' });
+  assert.equal(snapshotVerdict({ ...t, lastGoodAt: 5000 }, 5001 + MAX_BEHIND_MS).kind, 'refuse');
+  // The passkey was removed while the screen was open.
+  const gone = snapshotVerdict({ ...t, lastGoodAt: 9000, goneSince: 9500 }, 9501 + MAX_BEHIND_MS);
+  assert.equal(gone.kind === 'refuse' && gone.code, 'request-invalid');
+  // A node behind the SDK's counter.
+  const behind = snapshotVerdict({ ...t, lastGoodAt: 12_000, behindSince: 1000 }, 12_000);
+  assert.equal(behind.kind === 'refuse' && behind.code, 'stale-counter');
+
+  // readSnapshot: null when the authority is gone, a throw when the read fails.
+  const w = world('createSession', createArgs());
+  assert.ok(await readSnapshot(w.chain.transport, w.req, () => 0));
+  w.chain.accounts.delete(w.authority);
+  assert.equal(await readSnapshot(w.chain.transport, w.req, () => 0), null);
+  w.chain.failWith = new Error('429');
+  await assert.rejects(readSnapshot(w.chain.transport, w.req, () => 0));
 });

@@ -2,7 +2,8 @@
  * The typed approval request, v1: a JSON object carried as base64url(UTF-8
  * JSON) in the URL fragment `#/?lk1=…`. Strict: the exact key set per kind,
  * canonical values only (base58 addresses, decimal u64 strings, unpadded
- * base64url), within the size caps. Anything else is refused, never repaired.
+ * base64url), within the size caps, and the JSON text itself canonical (the
+ * encoder's output, byte for byte). Anything else is refused, never repaired.
  *
  *   { v: 1, kind, cluster, programId, wallet, authority, credentialId, payer,
  *     counter, preparedSlot, minContextSlot?, args }
@@ -174,7 +175,14 @@ export function decodeApprovalRequest(value: string): DecodeResult {
   } catch {
     return { ok: false, code: 'typed-malformed', reason: 'not JSON' };
   }
-  return parseApprovalRequest(json);
+  const result = parseApprovalRequest(json);
+  // One request has one text: keys in schema order, no whitespace, no
+  // duplicate keys, numbers as integers. Anything else is refused, as the
+  // shared decoder does, so both agree on what a valid request is.
+  if (result.ok && JSON.stringify(approvalRequestJson(result.request)) !== text) {
+    return { ok: false, code: 'typed-malformed', reason: 'not in canonical form' };
+  }
+  return result;
 }
 
 /** The request as JSON, keys in schema order, values in their canonical text. */

@@ -12,7 +12,7 @@ import { sha256 } from '@noble/hashes/sha256';
 import { rawRule, type Action } from '../approval/actions.ts';
 import { utf8 } from '../approval/bytes.ts';
 import type { ApprovalRequest } from '../approval/envelope.ts';
-import { andList, cap, formatMoment, formatUnits, LAMPORTS_DECIMALS, orList, relativePhrase, short, windowPhrase, type Clock } from './format.ts';
+import { andList, cap, formatMoment, formatUnits, LAMPORTS_DECIMALS, orList, relativePhrase, short, slotWindowPhrase, windowPhrase, type Clock } from './format.ts';
 import type { MintRead, TypedChainView } from './reads.ts';
 import { knownToken } from './tokens.ts';
 
@@ -151,16 +151,64 @@ function buildAssets(rules: readonly Action[], cluster: ApprovalRequest['cluster
   return [...assets.values()];
 }
 
+/**
+ * What action expiries and recurring windows are measured in on the binary
+ * the chain runs: Unix seconds (`time-expiry`), slots (a configured binary
+ * without it), or unknown (a binary this page doesn't know), in which case
+ * no judgment that depends on an expiry is made.
+ */
+export type Basis = { readonly unit: 'seconds' | 'slots'; readonly now: bigint } | { readonly unit: 'unknown' };
+
+export function basisOf(view: TypedChainView): Basis {
+  if (view.features.has('time-expiry')) return { unit: 'seconds', now: view.clock.unixTimestamp };
+  if (view.binary === 'configured') return { unit: 'slots', now: view.clock.slot };
+  return { unit: 'unknown' };
+}
+
 /** An expired limit counts as exhausted, not as absent (`actions.rs`). */
-const expired = (t: Term | undefined, now: bigint) => !!t && t.expiresAt !== 0n && now > t.expiresAt;
-const effective = (t: Term | undefined, now: bigint) => (t ? (expired(t, now) ? 0n : t.amount) : null);
+const expired = (t: Term | undefined, basis: Basis) => !!t && basis.unit !== 'unknown' && t.expiresAt !== 0n && basis.now > t.expiresAt;
+const effective = (t: Term | undefined, basis: Basis) => (t ? (expired(t, basis) ? 0n : t.amount) : null);
 
 /** Whether `a` can leave at all: no limit on it is spent out or expired. */
-function canSpend(a: Asset, now: bigint): boolean {
-  for (const t of [a.lifetime, a.recurring, a.perTx]) if (t && effective(t, now) === 0n) return false;
+function canSpend(a: Asset, basis: Basis): boolean {
+  for (const t of [a.lifetime, a.recurring, a.perTx]) if (t && effective(t, basis) === 0n) return false;
   return true;
 }
 const hasTotal = (a: Asset) => !!(a.lifetime || a.recurring);
+
+/** A recurring window in words, in the unit the binary measures it in. */
+function windowWords(window: bigint, basis: Basis): string {
+  return basis.unit === 'seconds' ? windowPhrase(window) : basis.unit === 'slots' ? slotWindowPhrase(window) : 'in each window';
+}
+
+/** Below this, a recurring window with no balance to compare against is treated as no total at all. */
+export const SHORT_WINDOW_SECONDS = 3_600n;
+
+/**
+ * The most a recurring limit lets leave between `now` and `until` (both Unix
+ * seconds, the session live through `until`): a window opens at the payment
+ * that starts it, after the previous one has run its length, so at most
+ * floor(life / window) + 1 windows fit.
+ */
+export function recurringMost(r: { readonly amount: bigint; readonly window: bigint; readonly expiresAt: bigint }, now: bigint, until: bigint): bigint | null {
+  if (r.window <= 0n) return null;
+  const end = r.expiresAt !== 0n && r.expiresAt < until ? r.expiresAt : until;
+  if (end < now) return 0n;
+  return r.amount * ((end - now) / r.window + 1n);
+}
+
+/**
+ * Whether `a`'s only total is a recurring limit that, over the permission's
+ * life, could take everything the vault holds: then the screen treats it as
+ * having no total. Without a balance, a window under an hour counts as that.
+ */
+function recurringDrains(a: Asset, now: bigint, until: bigint, balance: bigint | null): boolean {
+  if (a.lifetime || !a.recurring) return false;
+  const most = recurringMost(a.recurring, now, until);
+  if (most === null) return true;
+  if (balance === null) return a.recurring.window < SHORT_WINDOW_SECONDS;
+  return balance > 0n && most >= balance;
+}
 
 /** "0.02 SOL", "5 USDC", "5 of token Gh9Z…tKJr", "5000 units of Gh9Z…tKJr". */
 function amountOf(a: Asset, amount: bigint): string {
@@ -174,32 +222,33 @@ function numberOf(a: Asset, amount: bigint): string {
 }
 
 /** The asset's total as the hero says it: the lifetime one, else the recurring one. */
-function totalPiece(a: Asset): string {
+function totalPiece(a: Asset, basis: Basis): string {
   if (a.lifetime) return amountOf(a, a.lifetime.amount);
   const r = a.recurring!;
-  return `${amountOf(a, r.amount)} ${windowPhrase(r.window)}`;
+  return `${amountOf(a, r.amount)} ${windowWords(r.window, basis)}`;
 }
 
 /** At most two assets: "0.02 SOL + 5 USDC"; more: "0.02 SOL + 3 tokens". */
-function heroOf(list: readonly Asset[]): string {
-  if (list.length === 1) return totalPiece(list[0]);
+function heroOf(list: readonly Asset[], basis: Basis): string {
+  const piece = (a: Asset) => totalPiece(a, basis);
+  if (list.length === 1) return piece(list[0]);
   if (list.length === 2) {
     const [a, b] = list;
-    if (a.symbol && b.symbol) return `${totalPiece(a)} + ${totalPiece(b)}`;
+    if (a.symbol && b.symbol) return `${piece(a)} + ${piece(b)}`;
     const named = [a, b].find((x) => x.symbol);
-    return named ? `${totalPiece(named)} + 1 other token` : '2 tokens';
+    return named ? `${piece(named)} + 1 other token` : '2 tokens';
   }
   const first = list[0];
-  return first.symbol ? `${totalPiece(first)} + ${list.length - 1} tokens` : `${list.length} tokens`;
+  return first.symbol ? `${piece(first)} + ${list.length - 1} tokens` : `${list.length} tokens`;
 }
 
 /** One Details row per asset: its totals, per-payment cap, or that it can't be spent. */
-function assetRows(assets: readonly Asset[], now: bigint, stored: boolean): TextRow[] {
+function assetRows(assets: readonly Asset[], basis: Basis, stored: boolean): TextRow[] {
   return assets.map((a) => {
-    if (!canSpend(a, now)) return { label: a.label, value: `Can't be spent with this`, testId: `asset-${a.label}` };
+    if (!canSpend(a, basis)) return { label: a.label, value: `Can't be spent with this`, testId: `asset-${a.label}` };
     const parts: string[] = [];
     if (a.lifetime) parts.push(stored ? `${amountOf(a, a.lifetime.amount)} left in total` : `Up to ${amountOf(a, a.lifetime.amount)} in total`);
-    if (a.recurring) parts.push(`Up to ${amountOf(a, a.recurring.amount)} ${windowPhrase(a.recurring.window)}`);
+    if (a.recurring) parts.push(`Up to ${amountOf(a, a.recurring.amount)} ${windowWords(a.recurring.window, basis)}`);
     if (a.perTx) parts.push(`At most ${amountOf(a, a.perTx.amount)} per payment`);
     return {
       label: a.label,
@@ -214,7 +263,7 @@ function assetRows(assets: readonly Asset[], now: bigint, stored: boolean): Text
 function earlyEnds(assets: readonly Asset[], until: bigint, now: bigint, clock: Clock): TextRow[] {
   const rows: TextRow[] = [];
   for (const a of assets) {
-    if (!canSpend(a, now)) continue;
+    if (!canSpend(a, { unit: 'seconds', now })) continue;
     const ends = [a.lifetime, a.recurring, a.perTx].filter((t): t is Term => !!t && t.expiresAt !== 0n && t.expiresAt < until).map((t) => t.expiresAt);
     if (!ends.length) continue;
     const first = ends.reduce((x, y) => (y < x ? y : x));
@@ -223,11 +272,32 @@ function earlyEnds(assets: readonly Asset[], until: bigint, now: bigint, clock: 
   return rows;
 }
 
-function programRows(rules: readonly Action[]): TextRow[] {
-  const allow = rules.flatMap((r) => (r.type === 'programWhitelist' ? [short(r.program)] : []));
-  const deny = rules.flatMap((r) => (r.type === 'programBlacklist' ? [short(r.program)] : []));
-  if (allow.length) return [{ label: 'Apps it can use', value: [...new Set(allow)].join(', '), note: 'It can still reach other apps through these.' }];
-  if (deny.length) return [{ label: "Apps it can't use", value: [...new Set(deny)].join(', '), note: 'It can still reach them through other apps.' }];
+/**
+ * The program lists. A blacklist entry stops counting when its own expiry
+ * passes (`names_program`), so one that ends before the permission does says
+ * until when; one already ended is left out. (A whitelist entry that ends
+ * early only narrows what is allowed, down to nothing.)
+ */
+function programRows(rules: readonly Action[], basis: Basis, clock: Clock, until: bigint | null = null): TextRow[] {
+  const allow = [...new Set(rules.flatMap((r) => (r.type === 'programWhitelist' ? [short(r.program)] : [])))];
+  if (allow.length) return [{ label: 'Apps it can use', value: allow.join(', '), note: 'It can still reach other apps through these.' }];
+  const ends = new Map<string, bigint>();
+  for (const r of rules) {
+    if (r.type !== 'programBlacklist') continue;
+    const prev = ends.get(r.program);
+    // Several entries for one program: the ban lasts as long as the longest (0 = never ends).
+    if (prev === undefined || prev !== 0n) ends.set(r.program, r.expiresAt === 0n || prev === undefined ? r.expiresAt : r.expiresAt > prev ? r.expiresAt : prev);
+  }
+  const deny: string[] = [];
+  for (const [program, end] of ends) {
+    if (end === 0n || (until !== null && end >= until)) deny.push(short(program));
+    else if (basis.unit === 'seconds') {
+      if (basis.now <= end) deny.push(`${short(program)} until about ${formatMoment(end, basis.now, clock)}`);
+    } else if (basis.unit === 'slots') {
+      if (basis.now <= end) deny.push(`${short(program)} until slot ${end}`);
+    } else deny.push(`${short(program)} (for a limited time)`);
+  }
+  if (deny.length) return [{ label: "Apps it can't use", value: deny.join(', '), note: 'It can still reach them through other apps.' }];
   return [];
 }
 
@@ -247,11 +317,15 @@ function vaultBalance(a: Asset, view: TypedChainView): bigint | null {
 
 // ─── Screens ────────────────────────────────────────────────────────────────
 
-/** Whether a createSession screen will say "could spend all X": it then reads the vault. */
+/**
+ * Whether a createSession screen may say "could spend all X": it then reads
+ * the vault. That is any asset without a lifetime total: one with only a
+ * per-payment cap, or one whose recurring limit is compared with the balance.
+ */
 export function needsHoldings(req: ApprovalRequest, mints: Readonly<Record<string, MintRead>>, now: bigint): boolean {
   if (req.kind !== 'createSession') return false;
   const assets = buildAssets(req.args.decoded, req.cluster, mints);
-  return assets.some((a) => canSpend(a, now) && !hasTotal(a));
+  return assets.some((a) => canSpend(a, { unit: 'seconds', now }) && !a.lifetime);
 }
 
 export function typedScreen(input: ScreenInput): TypedScreen {
@@ -277,10 +351,12 @@ function createScreen({ req, view, app, contextCaution = null, clock = {} }: Scr
   ];
   const stopFact = facts[1];
 
+  const basis: Basis = { unit: 'seconds', now };
   const assets = buildAssets(rules, req.cluster, view.mints);
-  const spendable = assets.filter((a) => canSpend(a, now));
-  const noTotal = spendable.filter((a) => !hasTotal(a));
-  const withTotal = spendable.filter(hasTotal);
+  const spendable = assets.filter((a) => canSpend(a, basis));
+  // No total, or a recurring one that over the permission's life could take all of it.
+  const noTotal = spendable.filter((a) => !hasTotal(a) || recurringDrains(a, now, expiresAt, vaultBalance(a, view)));
+  const withTotal = spendable.filter((a) => !noTotal.includes(a));
   const unreadable = spendable.some((a) => a.decimals === null);
   const caution = contextCaution ?? (unreadable ? "LazorKit can't read this token." : null);
 
@@ -340,25 +416,27 @@ function createScreen({ req, view, app, contextCaution = null, clock = {} }: Scr
     ? [{ label: 'Your other SOL and tokens', value: "Can't be spent with this", note: "Your account blocks it. Some NFTs and money in other apps aren't covered." }]
     : [];
   const details: TextRow[] = [
-    ...assetRows(assets, now, false),
+    ...assetRows(assets, basis, false),
     ...earlyEnds(assets, expiresAt, now, clock),
     ...d13,
     { label: 'Sends to', value: 'Any address or app' },
-    ...programRows(rules),
+    ...programRows(rules, basis, clock, expiresAt),
     who,
     FEE,
     ends,
     ...sources,
   ];
 
-  // Some asset has only a per-payment cap: whoever has the key could spend all of it.
+  // Some asset has only a per-payment cap, or a recurring limit that adds up
+  // to all of it: whoever has the key could spend all of it.
   if (noTotal.length) {
     const all = noTotal.map((a) => {
       const balance = vaultBalance(a, view);
       const what = balance === null ? `all your ${a.symbol ?? 'tokens of that kind'}` : `all ${amountOf(a, balance)}`;
-      return `${what}, ${numberOf(a, a.perTx!.amount)} at a time`;
+      const pace = a.recurring ? `${numberOf(a, a.recurring.amount)} ${windowPhrase(a.recurring.window)}` : `${numberOf(a, a.perTx!.amount)} at a time`;
+      return `${what}, ${pace}`;
     });
-    const plus = withTotal.length ? `, plus ${andList(withTotal.map(totalPiece))}` : '';
+    const plus = withTotal.length ? `, plus ${andList(withTotal.map((a) => totalPiece(a, basis)))}` : '';
     const block: Block = {
       tier: 'caution',
       title: `No total limit on ${orList(noTotal.map((a) => a.symbol ?? 'a token'))}`,
@@ -393,7 +471,7 @@ function createScreen({ req, view, app, contextCaution = null, clock = {} }: Scr
   // Every asset that can leave has a total.
   if (withTotal.length) {
     const tokensOnly = !assets.some((a) => a.key === SOL) && view.features.has('d13');
-    const hero = heroOf(withTotal);
+    const hero = heroOf(withTotal, basis);
     return {
       ...common,
       id: 'session-create',
@@ -445,15 +523,17 @@ function stopScreen({ req, view, app, contextCaution = null, clock = {} }: Scree
   const session = view.session!;
   const now = view.clock.unixTimestamp;
   const timed = view.features.has('time-expiry');
+  // Action expiries and windows, in the unit this binary measures them in.
+  const basis = basisOf(view);
   const assets = buildAssets(session.rules, req.cluster, {});
-  const spendable = assets.filter((a) => canSpend(a, now));
+  const spendable = assets.filter((a) => canSpend(a, basis));
   const noTotal = spendable.filter((a) => !hasTotal(a));
   const withTotal = spendable.filter(hasTotal);
 
   let summary: string;
   if (!session.rules.length) summary = 'No limits';
   else if (noTotal.length) summary = `No total limit on ${orList(noTotal.map((a) => a.symbol ?? 'a token'))}`;
-  else if (withTotal.length) summary = heroOf(withTotal);
+  else if (withTotal.length) summary = heroOf(withTotal, basis);
   else summary = "Can't spend your money";
   const moment = formatMoment(session.expiresAt, now, clock);
   const heroLine = !timed ? summary : now > session.expiresAt ? `It already ended at about ${moment}` : `${summary} · ends about ${moment}`;
@@ -462,11 +542,11 @@ function stopScreen({ req, view, app, contextCaution = null, clock = {} }: Scree
   for (const a of assets) {
     if (!hasTotal(a)) continue;
     const parts: string[] = [];
-    if (a.lifetime) parts.push(expired(a.lifetime, now) ? 'Its total has ended' : `${amountOf(a, a.lifetime.amount)} in total`);
+    if (a.lifetime) parts.push(expired(a.lifetime, basis) ? 'Its total has ended' : `${amountOf(a, a.lifetime.amount)} in total`);
     if (a.recurring && timed) {
       const r = a.recurring;
-      const fresh = r.lastReset === 0n || now - r.lastReset >= r.window;
-      parts.push(expired(r, now) ? 'Its limit has ended' : `${amountOf(a, fresh ? r.amount : r.amount - r.spent > 0n ? r.amount - r.spent : 0n)} this window`);
+      const fresh = r.lastReset === 0n || now - r.lastReset > r.window;
+      parts.push(expired(r, basis) ? 'Its limit has ended' : `${amountOf(a, fresh ? r.amount : r.amount - r.spent > 0n ? r.amount - r.spent : 0n)} this window`);
     }
     if (parts.length) left.push({ label: `Left to spend: ${a.label}`, value: parts.join(' · ') });
   }
@@ -501,15 +581,15 @@ function stopScreen({ req, view, app, contextCaution = null, clock = {} }: Scree
 
 const ROLE_WORDS = { owner: 'Full control', admin: 'Can add keys and spend', spender: 'Can spend within its limits' } as const;
 
-function removeScreen({ req, view, app, knownHosts = [], contextCaution = null }: ScreenInput & { req: Extract<ApprovalRequest, { kind: 'removeAuthority' }> }): TypedScreen {
+function removeScreen({ req, view, app, knownHosts = [], contextCaution = null, clock = {} }: ScreenInput & { req: Extract<ApprovalRequest, { kind: 'removeAuthority' }> }): TypedScreen {
   const target = view.target!;
-  const now = view.clock.unixTimestamp;
+  const basis = basisOf(view);
   const passkey = target.key.type === 'passkey';
   const rpHost = target.key.type === 'passkey' ? knownHosts.find((h) => hexOf(sha256(utf8(h))) === (target.key as { rpIdHash: string }).rpIdHash) : undefined;
   const hero = passkey ? 'Remove a device' : 'Remove a key';
   const heroLine = passkey ? (rpHost ? `Works on ${rpHost}` : null) : `Key ending ${(target.key as { publicKey: string }).publicKey.slice(-4)}`;
   const facts: TextRow[] = target.role === 'owner' && view.ownerCount === 2 ? [{ label: 'Full control left', value: "Only the passkey you're using now", testId: 'fact-owners' }] : [];
-  const policyRows = target.rules.length ? assetRows(buildAssets(target.rules, req.cluster, {}), now, true) : [];
+  const policyRows = target.rules.length ? assetRows(buildAssets(target.rules, req.cluster, {}), basis, true) : [];
   return {
     id: passkey ? 'device-remove' : 'key-remove',
     variant: null,
@@ -525,7 +605,7 @@ function removeScreen({ req, view, app, knownHosts = [], contextCaution = null }
     details: [
       { label: 'What it can do now', value: ROLE_WORDS[target.role], testId: 'target-role' },
       ...policyRows,
-      ...programRows(target.rules),
+      ...programRows(target.rules, basis, clock),
       { label: 'Money', value: 'None moves' },
       FEE,
       depositRow(req, app),

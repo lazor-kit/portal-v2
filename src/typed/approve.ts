@@ -43,6 +43,39 @@ export function bindAtApprove(req: ApprovalRequest, snapshot: Snapshot | null, n
   return { kind: 'sign', binding: { slot, counter, challenge: approvalChallenge(req, { slot, counter }) } };
 }
 
+/** How the snapshots have gone since the screen opened, in `performance.now()` milliseconds. */
+export interface SnapshotTrack {
+  /** When the screen started taking snapshots. */
+  readonly startedAt: number;
+  /** When the last usable snapshot arrived; null before the first. */
+  readonly lastGoodAt: number | null;
+  /** Since when every answer says the signing passkey is gone from the account; null otherwise. */
+  readonly goneSince: number | null;
+  /** Since when the node has been behind the SDK's counter; null otherwise. */
+  readonly behindSince: number | null;
+}
+
+export type SnapshotVerdict =
+  | { readonly kind: 'ok' }
+  | { readonly kind: 'refuse'; readonly code: 'request-invalid' | 'chain-unavailable' | 'stale-counter'; readonly reason?: string };
+
+/**
+ * Whether the open screen can still be signed from. After `MAX_BEHIND_MS`
+ * of answers saying the passkey was removed: `request-invalid`; of a node
+ * behind the SDK: `stale-counter`; of no usable answer at all (reads failing,
+ * a rate limit, the RPC down): `chain-unavailable`, which offers Try again.
+ */
+export function snapshotVerdict(t: SnapshotTrack, now: number): SnapshotVerdict {
+  if (t.goneSince !== null && now - t.goneSince > MAX_BEHIND_MS) {
+    return { kind: 'refuse', code: 'request-invalid', reason: "The passkey it names isn't part of this account anymore." };
+  }
+  if (t.behindSince !== null && now - t.behindSince > MAX_BEHIND_MS) return { kind: 'refuse', code: 'stale-counter' };
+  if (now - (t.lastGoodAt ?? t.startedAt) > MAX_BEHIND_MS) {
+    return { kind: 'refuse', code: 'chain-unavailable', reason: "LazorKit couldn't read the network for a while." };
+  }
+  return { kind: 'ok' };
+}
+
 /** The `typed` block of a reply: what the SDK rebinds its prepared transaction with. */
 export interface TypedReply {
   readonly v: 1;

@@ -5,9 +5,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { base64urlEncode, type ApprovalRequest } from '../src/approval/index.ts';
 import { readTypedChain, type TypedChainView } from '../src/typed/reads.ts';
-import { countWords, firstViewTexts, needsHoldings, typedScreen, type TypedScreen } from '../src/typed/screen.ts';
+import { countWords, firstViewTexts, needsHoldings, recurringMost, typedScreen, type TypedScreen } from '../src/typed/screen.ts';
+import { slotWindowPhrase, windowPhrase } from '../src/typed/format.ts';
 import { addressBytes } from '../src/approval/bytes.ts';
-import { addr, cat, CONFIG, DEVNET_USDC, ed25519Authority, mintData, NOW, passkeyAuthority, PROGRAM, sample, sessionData, TOKEN, world } from './typed-fixtures.ts';
+import { action, addr, cat, CONFIG, DEVNET_USDC, ed25519Authority, mintData, NOW, passkeyAuthority, PROGRAM, sample, sessionData, SLOT, TOKEN, world } from './typed-fixtures.ts';
 
 const USDC = addressBytes(DEVNET_USDC)!;
 const clock = { timeZone: 'UTC' };
@@ -213,4 +214,109 @@ test('the first view carries nothing the app wrote: no addresses, no keys, only 
   assert.match(first, /swap\.tinydex\.fun could spend/);
   // Numbers come from the signed bytes: 2,000,000 lamports and 5,000,000 base units.
   assert.match(s.block!.body, /0\.002 at a time, plus 5 USDC/);
+});
+
+test('window wording: "every second", "every minute", never "every 1 seconds"', () => {
+  assert.equal(windowPhrase(1n), 'every second');
+  assert.equal(windowPhrase(60n), 'every minute');
+  assert.equal(windowPhrase(120n), 'every 2 minutes');
+  assert.equal(windowPhrase(45n), 'every 45 seconds');
+  assert.equal(windowPhrase(3_600n), 'an hour');
+  assert.equal(windowPhrase(7_200n), 'every 2 hours');
+  assert.equal(windowPhrase(86_400n), 'a day');
+  assert.equal(windowPhrase(604_800n), 'a week');
+  for (let n = 1n; n <= 200_000n; n += n < 200n ? 1n : 997n) assert.doesNotMatch(windowPhrase(n), /every 1 \w/, `${n}`);
+  assert.equal(slotWindowPhrase(1n), 'every slot');
+  assert.equal(slotWindowPhrase(216_000n), 'every 216,000 slots');
+});
+
+test('a recurring limit: the most it lets leave over the permission\'s life', () => {
+  const r = (amount: bigint, window: bigint, expiresAt = 0n) => ({ amount, window, expiresAt });
+  assert.equal(recurringMost(r(5n, 86_400n), NOW, NOW + 3n * 3600n), 5n, 'one window fits in 3 hours');
+  assert.equal(recurringMost(r(5n, 86_400n), NOW, NOW + 86_400n), 10n, 'a payment now and one a day later');
+  assert.equal(recurringMost(r(1n, 1n), NOW, NOW + 30n * 86_400n), 30n * 86_400n + 1n);
+  assert.equal(recurringMost(r(1n, 1n, NOW + 10n), NOW, NOW + 86_400n), 11n, 'its own earlier end counts');
+  assert.equal(recurringMost(r(1n, 0n), NOW, NOW + 10n), null);
+});
+
+test('session-no-total: a recurring limit that adds up to all of it gets the caution, whatever window the app picked', async () => {
+  const days30 = NOW + 30n * 86_400n;
+  // 1 SOL every second for 30 days, with 5 SOL in the account.
+  const fast = create(sample.solRecurring(1_000_000_000n, 1n), days30, (w) => (w.chain.lamports = 5_000_000_000n));
+  const s = (await screenFor(fast)).screen;
+  assert.equal(s.id, 'session-no-total');
+  assert.equal(s.tier, 'caution');
+  assert.equal(s.hero, null);
+  assert.deepEqual(s.block, { tier: 'caution', title: 'No total limit on SOL', body: 'Fernway could spend all 5 SOL, 1 every second, to anyone, without asking.' });
+  assert.equal(detail(s, 'SOL')?.value, 'Up to 1 SOL every second');
+  assert.equal(detail(s, 'Your SOL')?.value, '5 SOL');
+  assert.ok(fast.chain.calls.some((c) => c.method === 'getBalance'), 'the vault is read for it');
+  // Every minute, a balance that can't be read: a short window counts as no total, no number invented.
+  const unread = create(sample.solRecurring(1_000_000_000n, 60n), days30, (w) => (w.chain.failBalance = true));
+  assert.equal((await screenFor(unread)).screen.block?.body, 'Fernway could spend all your SOL, 1 every minute, to anyone, without asking.');
+  // A token at a fast pace, SOL with a real total: the caution names the token, the SOL total follows.
+  const usdc = create(cat(sample.solLimit(20_000_000n), sample.tokenRecurring(USDC, 1_000_000n, 1n)), days30, (w) => (w.chain.tokens = [{ mint: DEVNET_USDC, amount: 7_000_000n, decimals: 6 }]));
+  assert.deepEqual((await screenFor(usdc)).screen.block, {
+    tier: 'caution',
+    title: 'No total limit on USDC',
+    body: 'Fernway could spend all 7 USDC, 1 every second, plus 0.02 SOL, to anyone, without asking.',
+  });
+  // A total of its own caps it: the calm screen stays.
+  const capped = (await screenFor(create(cat(sample.solLimit(20_000_000n), sample.solRecurring(1_000_000_000n, 1n)), days30))).screen;
+  assert.equal(capped.id, 'session-create');
+  assert.equal(capped.hero, '0.02 SOL');
+});
+
+test('session-create: a recurring limit that stays under the balance keeps the calm screen', async () => {
+  // 0.02 SOL a day for 30 days is at most 0.62 SOL; the account holds 1.25.
+  const daily = (await screenFor(create(sample.solRecurring(20_000_000n, 86_400n), NOW + 30n * 86_400n))).screen;
+  assert.equal(daily.id, 'session-create');
+  assert.equal(daily.hero, '0.02 SOL a day');
+  // A day's window and no balance read: not short, so no caution.
+  const unread = (await screenFor(create(sample.solRecurring(20_000_000n, 86_400n), H3, (w) => (w.chain.failBalance = true)))).screen;
+  assert.equal(unread.id, 'session-create');
+  // 1 SOL a day for 30 days could take all 1.25 SOL.
+  const big = (await screenFor(create(sample.solRecurring(1_000_000_000n, 86_400n), NOW + 30n * 86_400n))).screen;
+  assert.equal(big.block?.body, 'Fernway could spend all 1.25 SOL, 1 a day, to anyone, without asking.');
+});
+
+test("Apps it can't use: a ban that ends before the permission says until when; one already over is left out", async () => {
+  const banned = addr();
+  const early = (await screenFor(create(cat(sample.solLimit(1n), action(11, addressBytes(banned)!, NOW + 3600n))))).screen;
+  assert.equal(detail(early, "Apps it can't use")?.value, `${banned.slice(0, 4)}…${banned.slice(-4)} until about 4:50 PM`);
+  const lasting = (await screenFor(create(cat(sample.solLimit(1n), action(11, addressBytes(banned)!, H3 + 60n))))).screen;
+  assert.equal(detail(lasting, "Apps it can't use")?.value, `${banned.slice(0, 4)}…${banned.slice(-4)}`);
+  const never = (await screenFor(create(cat(sample.solLimit(1n), sample.blacklist(addressBytes(banned)!), action(11, addressBytes(banned)!, NOW + 60n))))).screen;
+  assert.equal(detail(never, "Apps it can't use")?.value, `${banned.slice(0, 4)}…${banned.slice(-4)}`, 'a never-ending entry for the same program wins');
+  const over = (await screenFor(create(cat(sample.solLimit(1n), action(11, addressBytes(banned)!, NOW - 1n))))).screen;
+  assert.equal(detail(over, "Apps it can't use"), undefined);
+});
+
+test('on a binary without Unix-time expiry, action expiries and windows are slots (devnet before #57)', async () => {
+  const features: typeof CONFIG.features = ['wallet-bound-challenge', 'd13', 'nonowner-invariants'];
+  const later = SLOT + 50_000n;
+  // Stop: a SolLimit that ends at a future slot is still live.
+  const w = world('revokeSession', { session: addr(), refund: addr() });
+  const session = (w.req as Extract<ApprovalRequest, { kind: 'revokeSession' }>).args.session;
+  w.chain.set(session, PROGRAM, sessionData({ wallet: w.wallet, sessionKey: addr(), expiresAt: later, actions: sample.solLimit(15_000_000n, later) }));
+  const s = (await screenFor(w, { features })).screen;
+  assert.equal(s.heroLine, '0.015 SOL');
+  assert.equal(detail(s, 'Left to spend: SOL')?.value, '0.015 SOL in total');
+  // Remove: a Delegate whose limits end at future slots, a window in slots, a ban until a slot.
+  const k = world('removeAuthority', { target: addr(), refund: addr() });
+  const target = (k.req as Extract<ApprovalRequest, { kind: 'removeAuthority' }>).args.target;
+  const banned = addr();
+  const policy = cat(sample.tokenRecurring(USDC, 50_000_000n, 216_000n, later), sample.solLimit(5n, SLOT - 1n), action(11, addressBytes(banned)!, later));
+  k.chain.set(target, PROGRAM, ed25519Authority({ wallet: k.wallet, publicKey: addr(), role: 2, policy }));
+  const ks = (await screenFor(k, { features })).screen;
+  assert.equal(detail(ks, 'USDC')?.value, 'Up to 50 USDC every 216,000 slots');
+  assert.equal(detail(ks, 'SOL')?.value, "Can't be spent with this", 'its slot has passed');
+  assert.equal(detail(ks, "Apps it can't use")?.value, `${banned.slice(0, 4)}…${banned.slice(-4)} until slot ${later}`);
+  // A binary this page doesn't know: no expiry is judged, no unit is claimed.
+  const r = await readTypedChain(k.chain.transport, k.req, { config: { ...CONFIG, lastDeploySlot: 1 } });
+  assert.ok(r.ok);
+  const unknown = typedScreen({ req: k.req, view: r.view, app: 'Fernway', clock });
+  assert.equal(unknown.details.find((d) => d.label === 'SOL')?.value, '0.000000005 SOL left in total');
+  assert.equal(unknown.details.find((d) => d.label === 'USDC')?.value, 'Up to 50 USDC in each window');
+  assert.equal(unknown.details.find((d) => d.label === "Apps it can't use")?.value, `${banned.slice(0, 4)}…${banned.slice(-4)} (for a limited time)`);
 });

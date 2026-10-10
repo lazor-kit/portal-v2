@@ -28,8 +28,13 @@ import {
 const PROGRAM = '57bTNWqtYTJbWuLWASKo6GqUTAK6oFDUR5c6hEc6V8nv';
 const addr = () => Keypair.generate().publicKey.toBase58();
 
+/** Schema order: the encoder writes keys in it, and the decoder accepts only that text. */
+const ORDER = ['v', 'kind', 'cluster', 'programId', 'wallet', 'authority', 'credentialId', 'payer', 'counter', 'preparedSlot', 'minContextSlot', 'args'];
+const inOrder = (o: Record<string, unknown>) =>
+  Object.fromEntries(Object.entries(o).sort(([a], [b]) => (ORDER.includes(a) ? ORDER.indexOf(a) : ORDER.length) - (ORDER.includes(b) ? ORDER.indexOf(b) : ORDER.length)));
+
 function createSession(over: Partial<Record<string, unknown>> = {}, args: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
-  return {
+  return inOrder({
     v: 1,
     kind: 'createSession',
     cluster: 'devnet',
@@ -42,7 +47,7 @@ function createSession(over: Partial<Record<string, unknown>> = {}, args: Partia
     preparedSlot: '412388000',
     args: { sessionKey: addr(), expiresAt: '1791650000', actions: base64urlEncode(sample.solLimit(20_000_000n)), ...args },
     ...over,
-  };
+  });
 }
 const show = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x));
 const encode = (json: unknown) => base64urlEncode(new TextEncoder().encode(JSON.stringify(json)));
@@ -132,6 +137,26 @@ test('envelope: anything off-schema is refused, never repaired', () => {
     const d = decodeApprovalRequest(encode(json));
     assert.equal(d.ok, false, name);
     assert.equal(!d.ok && d.code, code, name);
+  }
+  // Only the encoder's own text: what the shared decoder accepts, the portal accepts.
+  const text = JSON.stringify(createSession());
+  const fromText = (t: string) => decodeApprovalRequest(base64urlEncode(new TextEncoder().encode(t)));
+  assert.ok(fromText(text).ok, 'the canonical text');
+  const noncanonical: [string, string][] = [
+    ['whitespace', JSON.stringify(JSON.parse(text), null, 1)],
+    ['a space after a colon', text.replace('"v":1', '"v": 1')],
+    ['keys reordered', JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(text)).reverse()))],
+    ['args keys reordered', text.replace(/"args":\{"sessionKey":("[^"]+"),"expiresAt":("[^"]+"),/, '"args":{"expiresAt":$2,"sessionKey":$1,')],
+    ['a duplicate key (the last one would win)', text.replace('"counter":7', '"counter":8,"counter":7')],
+    ['7.0 for 7', text.replace('"counter":7', '"counter":7.0')],
+    ['7e0 for 7', text.replace('"counter":7', '"counter":7e0')],
+    ['an escaped character', text.replace('"kind":"createSession"', '"kind":"create\\u0053ession"')],
+  ];
+  for (const [name, t] of noncanonical) {
+    assert.notEqual(t, text, `${name}: the case changes the text`);
+    const d = fromText(t);
+    assert.equal(d.ok, false, name);
+    assert.equal(!d.ok && d.code, 'typed-malformed', name);
   }
   assert.equal(decodeApprovalRequest('not base64!').ok, false);
   assert.equal(decodeApprovalRequest(base64urlEncode(Uint8Array.of(0xff, 0xfe))).ok, false, 'not UTF-8');

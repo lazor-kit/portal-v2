@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import type { ApprovalRequest } from "@/approval/envelope"
 import { portalTransport, type Transport } from "@/chain/transport"
 import { programs } from "@/config"
-import { bindAtApprove, MAX_BEHIND_MS, SNAPSHOT_INTERVAL_MS, type BindResult } from "@/typed/approve"
+import { bindAtApprove, SNAPSHOT_INTERVAL_MS, snapshotVerdict, type BindResult } from "@/typed/approve"
 import { readDeploySlot, readSnapshot, readTypedChain, type Snapshot, type TypedChainView } from "@/typed/reads"
 import { needsHoldings } from "@/typed/screen"
 
@@ -22,13 +22,25 @@ const deploySlots = new Map<string, Promise<number | null>>()
  * A refresh changes nothing shown, so it never re-arms the button; only a
  * snapshot that is too old, or a node behind the SDK's counter, turns it off.
  */
-export function useTyped(request: ApprovalRequest | null, active: boolean, transportFor: (cluster: ApprovalRequest["cluster"]) => Transport = portalTransport) {
+export function useTyped(
+  request: ApprovalRequest | null,
+  active: boolean,
+  /** Approve can't be tapped now (the passkey prompt is open, or the answer went): the snapshots' verdict waits. */
+  signing = false,
+  transportFor: (cluster: ApprovalRequest["cluster"]) => Transport = portalTransport,
+) {
+  const signingNow = useRef(signing)
+  signingNow.current = signing
   const [state, setState] = useState<TypedState>({ phase: "loading" })
   const [attempt, setAttempt] = useState(0)
   const snapshot = useRef<Snapshot | null>(null)
   /** Whether Approve can sign now; drives the button only when it changes. */
   const [canSign, setCanSign] = useState<BindResult["kind"] | "wait-behind">("wait")
   const behindSince = useRef<number | null>(null)
+  /** When snapshots started, the last usable one arrived, and since when the passkey reads as removed. */
+  const startedAt = useRef(0)
+  const lastGoodAt = useRef<number | null>(null)
+  const goneSince = useRef<number | null>(null)
 
   useEffect(() => {
     if (!request || !active) return
@@ -63,10 +75,19 @@ export function useTyped(request: ApprovalRequest | null, active: boolean, trans
     if (!request || !ready) return
     let cancelled = false
     const transport = transportFor(request.cluster)
+    startedAt.current = performance.now()
+    lastGoodAt.current = null
+    goneSince.current = null
     const tick = async () => {
       try {
         const next = await readSnapshot(transport, request, () => performance.now())
-        if (cancelled || !next) return
+        if (cancelled) return
+        if (!next) {
+          goneSince.current ??= performance.now()
+          return
+        }
+        goneSince.current = null
+        lastGoodAt.current = next.at
         snapshot.current = next
         if (next.counter + 1 < request.counter) {
           behindSince.current ??= performance.now()
@@ -74,12 +95,18 @@ export function useTyped(request: ApprovalRequest | null, active: boolean, trans
           behindSince.current = null
         }
       } catch {
-        // A failed refresh leaves the last snapshot to age out.
+        // A failed refresh leaves the last snapshot to age out; with none
+        // usable for too long, the verdict below refuses.
       }
     }
     const evaluate = () => {
-      if (behindSince.current !== null && performance.now() - behindSince.current > MAX_BEHIND_MS) {
-        setState({ phase: "refused", code: "stale-counter" })
+      if (signingNow.current) return
+      const verdict = snapshotVerdict(
+        { startedAt: startedAt.current, lastGoodAt: lastGoodAt.current, goneSince: goneSince.current, behindSince: behindSince.current },
+        performance.now(),
+      )
+      if (verdict.kind === "refuse") {
+        setState({ phase: "refused", code: verdict.code, reason: verdict.reason })
         return
       }
       const result = bindAtApprove(request, snapshot.current, performance.now())
@@ -104,6 +131,8 @@ export function useTyped(request: ApprovalRequest | null, active: boolean, trans
   const retry = useCallback(() => {
     snapshot.current = null
     behindSince.current = null
+    lastGoodAt.current = null
+    goneSince.current = null
     setCanSign("wait")
     setAttempt((n) => n + 1)
   }, [])

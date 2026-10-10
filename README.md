@@ -64,8 +64,10 @@ RemoveAuthority:
 
 - The schema is strict: exact keys, base58 addresses, decimal u64 strings,
   unpadded base64url, the actions buffer exactly as the program receives it
-  (decoded with the program's own rules). At most 8,192 characters in the
-  fragment and 16,384 in the URL.
+  (decoded with the program's own rules). The JSON text must be the
+  encoder's own, byte for byte: keys in schema order, no whitespace, no
+  duplicate keys, integers written as integers. At most 8,192 characters in
+  the fragment and 16,384 in the URL.
 - The fragment is read once, before the router starts, then removed from the
   address bar; a `hashchange` after that refuses the request.
 - On load, the envelope with its own `preparedSlot` and `counter` must
@@ -80,14 +82,18 @@ RemoveAuthority:
   Clock once a second. Approve signs with that slot and the chain's counter
   + 1 (never below the SDK's), picked inside the click: the program's
   150-slot window starts when the person approves, not when the app
-  prepared. The reply adds `typed: { v, kind, slot, counter, sysvarIxIndex }`
+  prepared. If no usable snapshot arrives for 10 seconds the request is
+  refused (`chain-unavailable`, with "Try again"; `request-invalid` when the
+  passkey was removed from the account meanwhile). The reply adds `typed: { v, kind, slot, counter, sysvarIxIndex }`
   (`typedV`, `typedKind`, `typedSlot`, `typedCounter`, `typedSysvarIx` on
   the redirect channel); the SDK recomputes the challenge from its own inputs
   with them before it sends anything.
 - Screens: `session-create` ("Spending limit", the totals, "Fernway can spend
   this to anyone, without asking you.", when it ends and where to stop it),
   `session-no-total` (a caution block: "No total limit on SOL" and how much
-  could go), `session-no-limits` (a danger block, Cancel solid, a
+  could go; also when an asset's only total is a recurring limit that, over
+  the permission's life, could take all of it, or a window under an hour
+  when the balance can't be read), `session-no-limits` (a danger block, Cancel solid, a
   confirmation), `session-stop`, `device-remove` and `key-remove`. Details
   opens with "Matches what your passkey signs".
 - Refusals: `typed-malformed`, `typed-unsupported`, `challenge-mismatch`,
@@ -250,7 +256,16 @@ binary was last deployed at, and what that binary does
 claim that depends on the binary is made only when the feature is listed and
 the chain's program data says the binary is that deploy. A cluster that is
 not listed refuses typed requests (`wrong-network`); so does CreateSession
-without `time-expiry`. Change this file in the same release as the program.
+without `time-expiry`. On a listed binary without `time-expiry`, action
+expiries and recurring windows are read as slots; on a binary that isn't
+the listed deploy, no judgment that depends on an expiry is made.
+
+The deploy slot is known only once the program upgrade lands, so a program
+release goes: upgrade the program, read its ProgramData last-deploy slot,
+update this file and deploy the portal, and only then publish SDKs that
+send typed requests. Until the portal is redeployed, a typed CreateSession
+on that cluster is refused (`wrong-network`); RevokeSession and
+RemoveAuthority are not affected.
 
 ### `config/registry.json`
 

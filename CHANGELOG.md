@@ -11,7 +11,8 @@
   against the chain, and signed with the slot and counter the portal picks
   when the person approves. The signature reply adds a `typed` block
   (`typed*` parameters on the redirect channel) with that slot and counter.
-  Requests without a fragment are handled as before.
+  Requests without a fragment are handled as before. The request's JSON must
+  be in its canonical form (the shared encoder's output).
 
 - The portal signs only recognised challenge formats: LazorKit signed
   messages (shown as their text, which must match the challenge),
