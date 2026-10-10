@@ -246,8 +246,8 @@ both redirect rules at `deny`, `framing.mode` at `enforce`, and
 ### `config/programs.json`
 
 ```json
-{ "devnet": { "programId": "57bTNWqtYTJbWuLWASKo6GqUTAK6oFDUR5c6hEc6V8nv", "lastDeploySlot": 509521792,
-              "features": ["wallet-bound-challenge", "d13", "nonowner-invariants"] } }
+{ "devnet": { "programId": "57bTNWqtYTJbWuLWASKo6GqUTAK6oFDUR5c6hEc6V8nv", "lastDeploySlot": 509609649,
+              "features": ["wallet-bound-challenge", "d13", "nonowner-invariants", "time-expiry"] } }
 ```
 
 The LazorKit program a typed request may name on each cluster, the slot its

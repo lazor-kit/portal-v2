@@ -106,10 +106,11 @@ test('read once: the fragment is removed at load, and a later hashchange is tamp
   assert.equal(told, 1);
 });
 
-test('programs.json: strict, and the committed file describes devnet as it runs today (no time-expiry yet)', async () => {
+test('programs.json: strict, and the committed file describes devnet as it runs today (the #57 binary, with time-expiry)', async () => {
   const committed = parsePrograms(JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../config/programs.json', import.meta.url), 'utf8')));
   assert.equal(committed.devnet?.programId, PROGRAM);
-  assert.equal(committed.devnet?.features.includes('time-expiry'), false);
+  assert.equal(committed.devnet?.lastDeploySlot, 509609649);
+  assert.deepEqual(committed.devnet?.features, ['wallet-bound-challenge', 'd13', 'nonowner-invariants', 'time-expiry']);
   assert.equal(committed.mainnet, undefined);
   assert.throws(() => parsePrograms({ devnet: { ...CONFIG, programId: addr() } }));
   assert.throws(() => parsePrograms({ testnet: CONFIG }));

@@ -13,6 +13,9 @@
   (`typed*` parameters on the redirect channel) with that slot and counter.
   Requests without a fragment are handled as before. The request's JSON must
   be in its canonical form (the shared encoder's output).
+  On devnet, typed CreateSession is accepted from the program upgrade at
+  slot 509609649 (the binary with Unix-time session expiry); on a cluster
+  whose binary lacks it, the request is refused (`wrong-network`).
 
 - The portal signs only recognised challenge formats: LazorKit signed
   messages (shown as their text, which must match the challenge),
