@@ -31,7 +31,7 @@ const ENUMS: Record<string, readonly string[]> = {
   action: ['connect', 'sign'],
   channel: ['iframe', 'popup', 'redirect', 'webview', 'none'],
   evidence: ['ancestor-origins', 'message', 'referrer', 'none'],
-  kind: ['message', 'message-without-text', 'ownership', 'transaction', 'approval', 'refused', 'sign-in'],
+  kind: ['message', 'message-without-text', 'ownership', 'transaction', 'approval', 'typed', 'refused', 'sign-in'],
   outcome: ['shown', 'refused', 'approved', 'rejected', 'failed', 'undelivered'],
   cluster: ['mainnet', 'devnet'],
   clusterSource: ['request', 'default', 'preview'],

@@ -6,7 +6,11 @@ import { HashRouter } from 'react-router-dom';
 import '@fontsource-variable/atkinson-hyperlegible-next/index.css';
 import '@fontsource-variable/atkinson-hyperlegible-mono/index.css';
 import App from './App.tsx';
+import { captureFragment } from './typed/fragment.ts';
 import './index.css';
+
+// Before the router reads the location: a typed request is read once, then removed.
+captureFragment();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

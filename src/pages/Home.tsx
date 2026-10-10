@@ -7,6 +7,7 @@ import { AppIdentity, TopBar, type RequesterView } from "@/components/requester-
 import { HERO_ID, type Row } from "@/components/sheet"
 import { Cancelled, CheckingRequester, Closed, Ended, PasskeyWaiting, Receipt, SignedIn, Undelivered, type Approving } from "@/components/status"
 import { TransactionReview } from "@/components/transaction-review"
+import { TypedReview } from "@/components/typed-review"
 import { WalletConnection } from "@/components/wallet-connection"
 import { refusalText } from "@/security/refusal-text"
 import { refusalScreen } from "@/security/refusal-screen"
@@ -25,6 +26,10 @@ import { resolveRequester } from "@/security/requester"
 import { redirectUrlFor, refusalRoute, routeFor, sendReply, type ConnectedResult, type PortalResult, type ReplyRoute, type ReplyWindow } from "@/security/reply"
 import { buildEvent, sendEvent, type Outcome, type VisibilityTracking } from "@/security/telemetry"
 import { usePreview, type PreviewState } from "@/pages/use-preview"
+import { useTyped } from "@/pages/use-typed"
+import { typedReply } from "@/typed/approve"
+import { capturedFragment, fragmentTampered, onFragmentTampered } from "@/typed/fragment"
+import { typedScreen, type TypedScreen } from "@/typed/screen"
 import { parseCluster, type ResolvedCluster } from "@/utils/cluster"
 import { paymentHero } from "@/utils/preview"
 import { approvedBefore, rememberApproval } from "@/utils/storage"
@@ -64,9 +69,23 @@ function redirectLabel(raw: string | null): string | null {
   }
 }
 
+/** On the redirect channel, the site that opened the portal when it isn't the destination's own: a caution. */
+function openedElsewhereOf(requester: { channel: string; openedFrom: string | null }, origin: string | null): string | null {
+  if (requester.channel !== "redirect" || !requester.openedFrom || sameSite(requester.openedFrom, origin)) return null
+  return `This request was opened from another site: ${originHost(requester.openedFrom) ?? requester.openedFrom}.`
+}
+
 /** What is being approved, for the waiting, canceled and approved screens: the review's own hero. */
-function approvingFor(subject: Subject | null, preview: PreviewState, name: string): Approving {
+function approvingFor(subject: Subject | null, preview: PreviewState, name: string, typed: TypedScreen | null): Approving {
   switch (subject?.kind) {
+    case "typed":
+      return typed
+        ? {
+            hero: typed.hero ?? typed.block?.title ?? "",
+            next: typed.receipt.next,
+            typed: { ...typed.receipt, testNetwork: subject.request.cluster === "devnet" },
+          }
+        : { hero: "Approve a change", next: `${name} takes it from here.` }
     case "message":
       return { hero: "Sign a message", next: `The signature goes to ${name} only.` }
     case "message-without-text":
@@ -118,8 +137,24 @@ export default function Home() {
     [requester, request.redirectUrl],
   )
   const route = useMemo(() => routeFor(requester, redirect, request.redirectParam === "expo"), [requester, redirect, request.redirectParam])
-  const evaluation = useMemo(() => evaluateRequest({ request, requester, redirect, registry, policy }), [request, requester, redirect])
+  const evaluation = useMemo(() => evaluateRequest({ request, requester, redirect, registry, policy, typed: capturedFragment() }), [request, requester, redirect])
   const { subject, decision } = evaluation
+
+  // A typed request: its chain state and snapshot, read while it is shown.
+  const typedRequest = decision.outcome === "show" && subject?.kind === "typed" ? subject.request : null
+  // The snapshots' verdict only matters while Approve can still be tapped: not
+  // while the passkey prompt is open (the click bound it), nor after the answer.
+  const typed = useTyped(typedRequest, typedRequest !== null, phase !== "review" && phase !== "cancelled")
+  const [tampered, setTampered] = useState(fragmentTampered)
+  useEffect(() => onFragmentTampered(() => setTampered(true)), [])
+  const typedRefusal: { code: string; reason?: string } | null =
+    subject?.kind !== "typed"
+      ? null
+      : tampered
+        ? { code: "typed-malformed" }
+        : typed.state.phase === "refused"
+          ? { code: typed.state.code, reason: typed.state.reason }
+          : null
 
   const preview = usePreview(
     decision.outcome === "show" && subject?.kind === "transaction" ? subject.preview : null,
@@ -128,8 +163,8 @@ export default function Home() {
   )
 
   // Replies and checks read the latest evidence, which can change while a passkey prompt is open.
-  const latest = useRef({ route, evaluation, requester, redirect, network })
-  latest.current = { route, evaluation, requester, redirect, network }
+  const latest = useRef({ route, evaluation, requester, redirect, network, typedRefusal })
+  latest.current = { route, evaluation, requester, redirect, network, typedRefusal }
   /** One answer per request: a reply already sent is never followed by another. */
   const replied = useRef(false)
   /** The answer as it went out, for "Back to <App>": the same answer, the same way, never another. */
@@ -212,6 +247,49 @@ export default function Home() {
     }
   }, [finish])
 
+  /**
+   * Approve on a typed request: the slot and counter come from the latest
+   * snapshot, picked here, synchronously, so the passkey prompt opens inside
+   * the click (Safari requires it) and the program's 150-slot window starts now.
+   */
+  const typedBind = typed.bind
+  const approveTyped = useCallback(() => {
+    const now = latest.current
+    const before = now.evaluation
+    const subj = before.subject
+    if (before.decision.outcome !== "show" || subj?.kind !== "typed" || !before.credential || replied.current || now.typedRefusal) return
+    const bound = typedBind()
+    if (bound.kind !== "sign") return
+    const controller = new AbortController()
+    ceremony.current = controller
+    setPhase("busy")
+    setError(null)
+    signChallenge(bound.binding.challenge, before.credential, controller.signal).then(
+      ({ credentialId, assertion }) => {
+        if (controller.signal.aborted) return
+        // The requester must still be the one that was shown, and the request unchanged.
+        if (latest.current.evaluation.decision.outcome !== "show" || latest.current.typedRefusal) {
+          setPhase("review")
+          return
+        }
+        rememberApproval()
+        finish({ type: "signed", credentialId, assertion, timestamp: Date.now(), typed: typedReply(subj.request, bound.binding) }, "approved")
+      },
+      (e) => {
+        if (controller.signal.aborted || replied.current) return
+        setError(ceremonyErrorText(e))
+        setPhase("cancelled")
+      },
+    )
+  }, [finish, typedBind])
+
+  // A typed request refused while its passkey prompt is open (a fragment changed
+  // after load): stop the prompt; nothing it signs is sent.
+  const typedRefused = typedRefusal !== null
+  useEffect(() => {
+    if (typedRefused && !replied.current) ceremony.current?.abort()
+  }, [typedRefused])
+
   const connected = useCallback((result: ConnectedResult) => {
     // The requester must still be the one that was shown.
     if (latest.current.evaluation.decision.outcome !== "show") return
@@ -251,7 +329,7 @@ export default function Home() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || replied.current) return
-      if (latest.current.evaluation.decision.outcome !== "show") return
+      if (latest.current.evaluation.decision.outcome !== "show" || latest.current.typedRefusal) return
       if (phaseRef.current === "review" || phaseRef.current === "busy" || phaseRef.current === "cancelled") cancel()
     }
     document.addEventListener("keydown", onKey)
@@ -269,7 +347,16 @@ export default function Home() {
   }
   const who = whoIsAsking({ channel: view.channel, label: view.label, appName: view.appName })
   const name = who.name
-  const approving = approvingFor(subject, preview, name)
+  // The typed screen, from the signed bytes and what LazorKit read.
+  const knownHosts = useMemo(() => [window.location.hostname, ...registry.apps.flatMap((a) => (a.origins ?? []).map((o) => new URL(o).hostname))], [])
+  const screen = useMemo(() => {
+    if (subject?.kind !== "typed" || typed.state.phase !== "ready") return null
+    const contextCaution = requester.embeddedIn.length
+      ? `This request passed through another site: ${requester.embeddedIn[0]}.`
+      : openedElsewhereOf(requester, who.origin)
+    return typedScreen({ req: subject.request, view: typed.state.view, app: name, knownHosts, contextCaution })
+  }, [subject, typed.state, requester, who.origin, name, knownHosts])
+  const approving = approvingFor(subject, preview, name, screen)
   const explain = firstTime || retry
   // On the redirect channel, the site that opened the portal, when it isn't
   // the destination's own site: a caution where money or control is at stake.
@@ -293,7 +380,7 @@ export default function Home() {
       ) : answered === "signed" ? (
         <Receipt approving={approving} name={name} onBack={onBack} />
       ) : (
-        <Ended name={name} refused={decision.outcome === "refuse"} onBack={onBack} />
+        <Ended name={name} refused={decision.outcome === "refuse" || typedRefusal !== null} onBack={onBack} />
       )
   } else if (phase === "undelivered") {
     body = <Undelivered name={name} />
@@ -308,6 +395,18 @@ export default function Home() {
       const answers = refusalRoute(route, redirect).channel !== "none"
       body = <Refusal reason={decision.reason} screen={screen} closeLabel={answers ? `Back to ${name}` : "Close"} onClose={() => closeRefusal(decision.reason)} />
     }
+  } else if (typedRefusal) {
+    const refusal = refusalScreen(typedRefusal.code, name, typedRefusal.reason)
+    const answers = refusalRoute(route, redirect).channel !== "none"
+    body = (
+      <Refusal
+        reason={typedRefusal.code}
+        screen={refusal}
+        closeLabel={answers ? `Back to ${name}` : "Close"}
+        onClose={() => closeRefusal(typedRefusal.code)}
+        onRetry={typed.retry}
+      />
+    )
   } else if (phase === "busy") {
     body = <PasskeyWaiting approving={approving} firstTime={firstTime} onCancel={cancel} />
   } else if (phase === "cancelled") {
@@ -345,6 +444,21 @@ export default function Home() {
         framed={framed}
         explain={explain}
         onApprove={approve}
+        onCancel={cancel}
+      />
+    )
+  } else if (subject?.kind === "typed") {
+    body = (
+      <TypedReview
+        screen={screen}
+        cluster={subject.request.cluster}
+        context={context}
+        framed={framed}
+        explain={explain}
+        confirmRequired={visibility === "untracked"}
+        name={name}
+        canSign={typed.canSign}
+        onApprove={approveTyped}
         onCancel={cancel}
       />
     )

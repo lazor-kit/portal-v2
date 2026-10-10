@@ -11,8 +11,11 @@
  *
  * Message shapes are the ones every @lazorkit/wallet 3.x accepts
  * (`WALLET_CONNECTED`, `SIGNATURE_CREATED`, `error`); redirect fields are the
- * ones @lazorkit/wallet-mobile-adapter 2.x reads.
+ * ones @lazorkit/wallet-mobile-adapter 2.x reads. A typed request's signature
+ * also carries `typed` (the slot and counter the portal signed with), which
+ * older SDKs ignore: `data.typed` in a message, `typed*` in a redirect.
  */
+import type { TypedReply } from '../typed/approve.ts';
 import type { RedirectDecision } from './redirect.ts';
 import type { Requester } from './requester.ts';
 import { webOrigin } from './requester.ts';
@@ -52,7 +55,7 @@ export type ConnectedResult =
 
 export type PortalResult =
   | ConnectedResult
-  | { readonly type: 'signed'; readonly credentialId: string; readonly assertion: AssertionFields; readonly timestamp: number }
+  | { readonly type: 'signed'; readonly credentialId: string; readonly assertion: AssertionFields; readonly timestamp: number; readonly typed?: TypedReply }
   | { readonly type: 'error'; readonly code: string; readonly message: string };
 
 /**
@@ -121,7 +124,7 @@ export function messageFor(result: PortalResult): Record<string, unknown> {
     case 'signed':
       return {
         type: 'SIGNATURE_CREATED',
-        data: { credentialId: result.credentialId, timestamp: result.timestamp, ...result.assertion },
+        data: { credentialId: result.credentialId, timestamp: result.timestamp, ...result.assertion, ...(result.typed ? { typed: result.typed } : {}) },
       };
     case 'error':
       return { type: 'error', error: { message: result.message, code: result.code } };
@@ -159,6 +162,13 @@ export function redirectUrlFor(destination: URL, result: PortalResult, legacyExp
   } else {
     params.set('type', 'SIGNATURE_CREATED');
     setAssertion(params, result.assertion);
+    if (result.typed) {
+      params.set('typedV', String(result.typed.v));
+      params.set('typedKind', result.typed.kind);
+      params.set('typedSlot', result.typed.slot);
+      params.set('typedCounter', String(result.typed.counter));
+      params.set('typedSysvarIx', String(result.typed.sysvarIxIndex));
+    }
   }
   return url.href;
 }

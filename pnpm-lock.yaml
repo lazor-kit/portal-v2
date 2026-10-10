@@ -195,6 +195,9 @@ importers:
       '@eslint/js':
         specifier: ^9.21.0
         version: 9.39.1
+      '@lazorkit/sdk-legacy':
+        specifier: 1.4.0
+        version: 1.4.0(@solana/web3.js@1.98.4(bufferutil@4.0.9)(typescript@5.7.3)(utf-8-validate@5.0.10))
       '@types/node':
         specifier: ^24.0.0
         version: 24.10.3
@@ -579,6 +582,12 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@lazorkit/sdk-legacy@1.4.0':
+    resolution: {integrity: sha512-0+43TQ3byKw/BW7FT91TyMoDB8OFj5NEyFKpJzRc6nw2GDykuIL7lWAfJZ4E0X93OfwVKTsn+7YOlCu6Tbyl3g==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      '@solana/web3.js': ^1.95.0
 
   '@noble/curves@1.9.7':
     resolution: {integrity: sha512-gbKGcRUYIjA3/zCCNaWDciTMFI0dCkvou3TL8Zmy5Nc7sJ47a0jtOeZoTaMxkuqRo9cRhjOdZJXegxYE5FN/xw==}
@@ -3067,6 +3076,13 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
+
+  '@lazorkit/sdk-legacy@1.4.0(@solana/web3.js@1.98.4(bufferutil@4.0.9)(typescript@5.7.3)(utf-8-validate@5.0.10))':
+    dependencies:
+      '@noble/curves': 1.9.7
+      '@noble/hashes': 1.8.0
+      '@solana/web3.js': 1.98.4(bufferutil@4.0.9)(typescript@5.7.3)(utf-8-validate@5.0.10)
+      buffer: 6.0.3
 
   '@noble/curves@1.9.7':
     dependencies:

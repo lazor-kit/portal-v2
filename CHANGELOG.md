@@ -4,6 +4,19 @@
 
 ### For integrators
 
+- Typed requests (v1): CreateSession, RevokeSession and RemoveAuthority sent
+  with `#/?lk1=<request>` after the usual query are shown as what they do
+  ("0.02 SOL + 5 USDC", "No total limit on SOL", "Stop this spending
+  permission", "Remove a device"), checked against the signed challenge and
+  against the chain, and signed with the slot and counter the portal picks
+  when the person approves. The signature reply adds a `typed` block
+  (`typed*` parameters on the redirect channel) with that slot and counter.
+  Requests without a fragment are handled as before. The request's JSON must
+  be in its canonical form (the shared encoder's output).
+  On devnet, typed CreateSession is accepted from the program upgrade at
+  slot 509609649 (the binary with Unix-time session expiry); on a cluster
+  whose binary lacks it, the request is refused (`wrong-network`).
+
 - The portal signs only recognised challenge formats: LazorKit signed
   messages (shown as their text, which must match the challenge),
   ownership proofs, and 32-byte program challenges (with or without a
@@ -89,6 +102,13 @@
   preview deployments). `/api/rpc` and `/api/telemetry` answer the portal's
   own pages on any domain it is served from, plus `PORTAL_ORIGIN`. The client
   bundle holds no RPC URL or key.
+- `/api/rpc` also serves read-only chain reads for display: account, balance
+  and token accounts, the LazorKit v2 program's Authority, Session and
+  DeferredExec accounts of one wallet, and transaction history. Each method's
+  parameters are checked, each client address has a request budget, and
+  finalized transactions are kept in memory (an answer from memory costs no
+  budget). Signature lists are the newest only, without paging. The RPC
+  upstreams must serve `getProgramAccounts` and transaction history.
 - The preview is simulated on the network its blockhash belongs to; a failed
   simulation on a known network shows "This will probably fail" and makes
   "Approve anyway" the secondary button. When the network cannot be confirmed, a

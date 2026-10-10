@@ -24,6 +24,9 @@ system browser and gets the result back through a redirect.
 Nothing in the URL is trusted as is: the challenge is classified, the
 requester comes from the browser, and a redirect destination is checked.
 
+A typed request (below) adds a URL fragment, `#/?lk1=<base64url(UTF-8 JSON)>`,
+to the same query. The fragment never reaches a server or a `Referer`.
+
 ### What is signed
 
 The portal signs only these challenge formats (`src/security/challenge.ts`):
@@ -37,10 +40,66 @@ The portal signs only these challenge formats (`src/security/challenge.ts`):
 
 Anything else is refused with a reason, and the app is told why; the person
 reads what happened in plain words, and that their passkey signed nothing.
-The passkey always signs the classified bytes, with the passkey
-`credentialId` names. Control, zero-width and bidirectional characters in a
+The passkey always signs the classified bytes (for a typed request, the
+challenge recomputed with the slot and counter picked at Approve), with the
+passkey `credentialId` names. Control, zero-width and bidirectional characters in a
 message are shown as labelled markers ("reversed text"), never applied, with
 a caution; their code points are listed in Details.
+
+### Typed requests
+
+A typed request says what the program instruction does, so the portal can
+show it and check that the passkey signs exactly that (`src/approval`,
+`src/typed`). Version 1 covers CreateSession, RevokeSession and
+RemoveAuthority:
+
+```jsonc
+{ "v": 1, "kind": "createSession",        // | "revokeSession" | "removeAuthority"
+  "cluster": "devnet", "programId": "57bT…", "wallet": "…", "authority": "…",
+  "credentialId": "<base64url>", "payer": "…", "counter": 7,
+  "preparedSlot": "412388000", "minContextSlot": 412387990,   // optional
+  "args": { "sessionKey": "…", "expiresAt": "<unix seconds>", "actions": "<base64url>" } }
+// revokeSession: args { session, refund }; removeAuthority: args { target, refund }
+```
+
+- The schema is strict: exact keys, base58 addresses, decimal u64 strings,
+  unpadded base64url, the actions buffer exactly as the program receives it
+  (decoded with the program's own rules). The JSON text must be the
+  encoder's own, byte for byte: keys in schema order, no whitespace, no
+  duplicate keys, integers written as integers. At most 8,192 characters in
+  the fragment and 16,384 in the URL.
+- The fragment is read once, before the router starts, then removed from the
+  address bar; a `hashchange` after that refuses the request.
+- On load, the envelope with its own `preparedSlot` and `counter` must
+  recompute to the `message` the SDK sent, `credentialId` must be the
+  query's, and `authority` must be that passkey's on the wallet. Then the
+  portal reads the chain (`src/typed/reads.ts`): the binary (its last-deploy
+  slot against `config/programs.json`), the wallet, the authority, the Clock,
+  the session or the authority to remove, the mints the limits name, and the
+  vault when a "could spend all" line needs it. What the program would refuse
+  is refused here.
+- While the screen is open the portal reads the authority's counter and the
+  Clock once a second. Approve signs with that slot and the chain's counter
+  + 1 (never below the SDK's), picked inside the click: the program's
+  150-slot window starts when the person approves, not when the app
+  prepared. If no usable snapshot arrives for 10 seconds the request is
+  refused (`chain-unavailable`, with "Try again"; `request-invalid` when the
+  passkey was removed from the account meanwhile). The reply adds `typed: { v, kind, slot, counter, sysvarIxIndex }`
+  (`typedV`, `typedKind`, `typedSlot`, `typedCounter`, `typedSysvarIx` on
+  the redirect channel); the SDK recomputes the challenge from its own inputs
+  with them before it sends anything.
+- Screens: `session-create` ("Spending limit", the totals, "Fernway can spend
+  this to anyone, without asking you.", when it ends and where to stop it),
+  `session-no-total` (a caution block: "No total limit on SOL" and how much
+  could go; also when an asset's only total is a recurring limit that, over
+  the permission's life, could take all of it, or a window under an hour
+  when the balance can't be read), `session-no-limits` (a danger block, Cancel solid, a
+  confirmation), `session-stop`, `device-remove` and `key-remove`. Details
+  opens with "Matches what your passkey signs".
+- Refusals: `typed-malformed`, `typed-unsupported`, `challenge-mismatch`,
+  `wrong-network`, `request-invalid`, `stale-counter`, `chain-unavailable`
+  (with "Try again"). A request that carries a fragment never falls back to
+  the screen for a change LazorKit can't show.
 
 ### Who gets the answer
 
@@ -162,8 +221,8 @@ and counts the sender's origin as evidence.
 
 ## Configuration
 
-Both files are checked when the app is built and loaded
-(`src/security/config.ts`); a change is a commit and a deploy.
+The files are checked when the app is built and loaded
+(`src/security/config.ts`, `src/typed/programs.ts`); a change is a commit and a deploy.
 
 ### `config/portal-policy.json`
 
@@ -183,6 +242,30 @@ Both files are checked when the app is built and loaded
 The `enforce` settings are `transaction` and `approval` at `registered`,
 both redirect rules at `deny`, `framing.mode` at `enforce`, and
 `contentPolicy` at `enforce`.
+
+### `config/programs.json`
+
+```json
+{ "devnet": { "programId": "57bTNWqtYTJbWuLWASKo6GqUTAK6oFDUR5c6hEc6V8nv", "lastDeploySlot": 509609649,
+              "features": ["wallet-bound-challenge", "d13", "nonowner-invariants", "time-expiry"] } }
+```
+
+The LazorKit program a typed request may name on each cluster, the slot its
+binary was last deployed at, and what that binary does
+(`wallet-bound-challenge`, `d13`, `nonowner-invariants`, `time-expiry`). A
+claim that depends on the binary is made only when the feature is listed and
+the chain's program data says the binary is that deploy. A cluster that is
+not listed refuses typed requests (`wrong-network`); so does CreateSession
+without `time-expiry`. On a listed binary without `time-expiry`, action
+expiries and recurring windows are read as slots; on a binary that isn't
+the listed deploy, no judgment that depends on an expiry is made.
+
+The deploy slot is known only once the program upgrade lands, so a program
+release goes: upgrade the program, read its ProgramData last-deploy slot,
+update this file and deploy the portal, and only then publish SDKs that
+send typed requests. Until the portal is redeployed, a typed CreateSession
+on that cluster is refused (`wrong-network`); RevokeSession and
+RemoveAuthority are not affected.
 
 ### `config/registry.json`
 
@@ -242,7 +325,7 @@ popup should use `same-origin-allow-popups` if they set COOP.
 
 | Route | Purpose |
 |---|---|
-| `POST /api/rpc?cluster=mainnet\|devnet` | Solana JSON-RPC for the preview: `getMultipleAccounts`, `simulateTransaction`, `getLatestBlockhash`, `isBlockhashValid` only; one request of at most 64 KiB, from the portal's own pages |
+| `POST /api/rpc?cluster=mainnet\|devnet` | Solana JSON-RPC, read-only: the transaction preview and the chain reads pages show (below); one request of at most 64 KiB, from the portal's own pages, within a budget per client |
 | `POST /api/telemetry` | one decision event, logged as a JSON line; listed fields only |
 | `POST /api/csp-report` | CSP reports, logged as origins only |
 
@@ -250,16 +333,79 @@ popup should use `same-origin-allow-popups` if they set COOP.
 (whatever domain the deployment is reached on, a staging domain included),
 the deployment's own Vercel URLs, and `PORTAL_ORIGIN`.
 
+### `/api/rpc`
+
+The cluster comes from the request URL, and picks the upstream. Only these
+methods are forwarded, each with its parameters checked
+(`api/rpc.ts`); nothing that writes, signs or airdrops:
+
+| Method | Accepted |
+|---|---|
+| `getMultipleAccounts` | 1 to 100 addresses, `base64` |
+| `simulateTransaction` | a base64 transaction of at most 2048 characters, `sigVerify` off, at most 128 accounts returned |
+| `getLatestBlockhash`, `isBlockhashValid` | commitment and `minContextSlot` only |
+| `getAccountInfo` | one address, `base64`, optional `dataSlice` |
+| `getBalance` | one address |
+| `getTokenAccountsByOwner` | one owner, by mint or by program (SPL Token or Token-2022 only), `base64` or `jsonParsed` |
+| `getProgramAccounts` | the LazorKit v2 program of the request's cluster only, `base64`, with exactly two filters: one account type (Authority, Session or DeferredExec) and one wallet at that type's wallet offset |
+| `getSignaturesForAddress` | one address, the newest 1 to 1000 signatures (no `before` or `until`), `confirmed` or `finalized` |
+| `getTransaction` | one signature, `json`, `jsonParsed` or `base64`, transaction version 0 or 1, `confirmed` or `finalized` |
+
+- **Budget.** Each client address (an IPv6 client by its /64) has a budget
+  of request cost: 300, refilled at 5 a second. A program listing costs 10,
+  a signature list 5, a simulation or token listing 2, anything else 1.
+  Only calls to the upstream are charged; an answer from memory is free.
+  Past it, the route answers 429 with `Retry-After` and calls nothing. The
+  budget lives in the memory of the instance serving the request: it slows a
+  loop, it does not replace a rate limit at the edge.
+- **Caching.** Every answer is `Cache-Control: no-store`. A finalized
+  transaction cannot change, so the instance keeps up to 8 MiB of them and
+  answers a repeat without the upstream.
+- **Limits.** 8 s for the upstream to answer, 4 MiB for its answer.
+- **Logs.** One line per request: method, cluster, status, duration. Never
+  the upstream URL, a client address, or a request body.
+
 Environment variables (Production and Preview):
 
 | Name | Notes |
 |---|---|
-| `RPC_MAINNET_URL` | mainnet upstream, with its key; mark it sensitive; mainnet previews are unavailable without it |
-| `RPC_DEVNET_URL` | devnet upstream, a keyed endpoint; required: on a Vercel production or preview deployment, devnet previews are unavailable without it (the public devnet RPC rate-limits the platform's shared addresses). Locally it defaults to `https://api.devnet.solana.com` |
+| `RPC_MAINNET_URL` | mainnet upstream, with its key; mark it sensitive; mainnet reads are unavailable without it |
+| `RPC_DEVNET_URL` | devnet upstream, a keyed endpoint; required: on a Vercel production or preview deployment, devnet reads are unavailable without it (the public devnet RPC rate-limits the platform's shared addresses). Locally it defaults to `https://api.devnet.solana.com` |
 | `PORTAL_ORIGIN` | optional further origins allowed to call `/api/rpc` and `/api/telemetry`, comma-separated |
+
+Both upstreams must serve `getProgramAccounts` and transaction history
+(`getSignaturesForAddress`, `getTransaction`, version 1 transactions
+included): public endpoints often refuse or throttle these.
 
 Never put a secret in a `VITE_*` variable: those are compiled into the page.
 Rate-limit `/api/rpc` and `/api/telemetry` at the edge.
+
+### Chain reads for display (`src/chain`)
+
+Pages read the chain only through `/api/rpc`. Each read answers
+`{ status: 'ok', value }` or `{ status: 'unavailable', reason }` (`not-configured`,
+`rate-limited`, `timeout`, `upstream`, `refused`, `network`, `malformed`), and never
+fills in a value it could not read.
+
+| Read | What it returns |
+|---|---|
+| `readVault` | the vault's SOL, and its SPL Token and Token-2022 accounts with any delegate and delegated amount |
+| `readWalletAccounts` | the wallet's authorities (role, key, policy bytes), sessions (key, expiry: Unix seconds on a time-expiry binary, a slot before it; limit bytes) and deferred executions; accounts of a newer layout are counted, not decoded |
+| `readPaymentHistory` | payments out of the vault: successful, non-zero SOL transfers from it and token transfers it signed out of its token accounts, by the address paid (for tokens, the owner of the receiving account). Incoming transfers, failed transactions, zero-value transfers and transfers it did not sign never count; their other parties are listed apart as `counterparties`. It lists the newest 1000 signatures and reads at most 100 successful transactions, and says how many of the newest it read without a gap (`scanned`) and whether that was all of them (`coverage`) |
+| `paymentsTo` | from a history: the payments to one address, newest first |
+| `checkRecipient` | from a history: the relation (`paid` with a count and the last time, `first-time`, `not-in-recent` with how many were read, `own-account`, or `unknown`), and the closest lookalike among addresses paid, the user's own and saved ones, then counterparties (`none` only when the whole history was read; `none-in-recent` otherwise) |
+
+Addresses are compared on their full 32 bytes. A lookalike shares the ends of
+a known address without being it: at least 3 leading and 3 trailing
+characters is `danger`; only the first 4 or only the last 4 is `caution`.
+A counterparty match (`like.kind === 'counterparty'`) is an address that
+sent money in or got nothing of value: never "paid before". Counterparties
+are compared only when the recipient is not itself paid, own or saved.
+`first-time` needs the whole history read and every payment's recipient
+named; otherwise the relation is `not-in-recent` or `unknown`.
+`useRecipientCheck` (`src/hooks`) runs the check for a payment screen,
+reading each vault's history at most once a minute;
+`forgetPaymentHistory` clears it after a payment.
 
 Telemetry events carry the requester's origin (or `scheme://`), the channel,
 the evidence, the request kind, the outcome and its reason, and whether the
@@ -311,6 +457,9 @@ Node 24 and pnpm 10.26 (`packageManager` and `.nvmrc`).
 pnpm install --frozen-lockfile
 pnpm dev               # https://localhost:3000, with /api served locally
 pnpm test              # unit tests (node --test, no extra dependencies)
+node scripts/record-chain-fixtures.ts
+                       # re-record the devnet answers the chain-read tests replay
+                       # (public devnet RPC, or RECORD_RPC_URL; never written to a file)
 pnpm --dir compat install --frozen-lockfile && pnpm --dir compat test
                        # released SDKs (web 2.0.1, 2.1.0, 3.3.0) reading the portal's replies
 pnpm typecheck:test
@@ -336,3 +485,19 @@ pnpm e2e
 ```
 
 Results go to `e2e/.out/results.json`, screenshots to `e2e/.out/screens/`.
+
+`e2e/typed.mjs` runs typed requests end to end on a local validator: a wallet
+whose passkey the virtual authenticator holds, requests prepared with
+`@lazorkit/sdk-legacy` and opened as the SDK opens them, the screen read,
+Approve pressed (once after waiting more than 150 slots), and the transaction
+finalized with the portal's slot and counter and sent. It also covers a
+counter that moves before Approve, the caution and danger screens, a forged
+envelope, a changed fragment and an unconfigured network. The validator runs
+on its own ports and ledger, and is stopped and deleted at the end.
+
+```bash
+LAZORKIT_SO=<lazorkit-protocol devnet build>/lazorkit_program.so \
+LAZORKIT_INIT_AUTHORITY=<lazorkit-protocol>/keys/devnet-init-authority.json \
+TYPED_LEDGER=<an empty directory> PLAYWRIGHT_MODULE=/path/to/node_modules/playwright \
+pnpm e2e:typed
+```
