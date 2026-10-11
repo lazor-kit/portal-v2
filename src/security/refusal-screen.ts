@@ -11,7 +11,7 @@ export interface Row {
   readonly value: string;
 }
 
-export type RefusalKind = 'mismatch' | 'unreadable' | 'origin' | 'policy' | 'channel';
+export type RefusalKind = 'mismatch' | 'unreadable' | 'origin' | 'policy' | 'channel' | 'network' | 'invalid' | 'stale' | 'unavailable';
 
 export interface RefusalScreen {
   readonly kind: RefusalKind;
@@ -24,6 +24,8 @@ export interface RefusalScreen {
   readonly experts: readonly Row[];
   /** Whether the header names the requester (not when the portal can't tell who it is). */
   readonly showRequester: boolean;
+  /** "Try again" re-runs the checks (a read that failed); the request is otherwise unchanged. */
+  readonly retry?: boolean;
 }
 
 export const SIGNED_NOTHING = 'Your passkey signed nothing.';
@@ -38,10 +40,16 @@ const UNREADABLE_PROBLEM: Record<string, string> = {
   'connect-challenge-not-proof': "The sign-in request isn't in the standard form.",
   'credential-missing': "The request doesn't say which passkey should sign it.",
   'unknown-action': "LazorKit doesn't know what this request is asking for.",
+  'typed-malformed': "The request isn't in a form LazorKit can read, or it changed after this window opened.",
+  'typed-unsupported': 'This kind of request is newer than this window.',
 };
 
-/** The screen for refusal `reason`, naming the requester as `name` ("Fernway", "swap.tinydex.fun", "the app"). */
-export function refusalScreen(reason: string, name: string): RefusalScreen {
+/**
+ * The screen for refusal `reason`, naming the requester as `name` ("Fernway",
+ * "swap.tinydex.fun", "the app"). `why` is what LazorKit read that made it
+ * refuse, in plain words (a typed request that would fail on chain).
+ */
+export function refusalScreen(reason: string, name: string, why?: string): RefusalScreen {
   const experts: Row[] = [
     { label: 'Reason', value: reason },
     { label: 'For developers', value: refusalText(reason).detail },
@@ -60,6 +68,61 @@ export function refusalScreen(reason: string, name: string): RefusalScreen {
         ],
         experts,
         showRequester: true,
+      };
+    case 'challenge-mismatch':
+      return {
+        kind: 'mismatch',
+        hero: 'LazorKit stopped this request',
+        sentence: `It didn't match what you'd approve. ${SIGNED_NOTHING}`,
+        note: `If it keeps happening, contact ${name}.`,
+        details: [
+          { label: 'Problem', value: 'The details sent with this request and the data to sign are different.' },
+          { label: 'Your account', value: 'Nothing left your account.' },
+          WHY_SHOWN,
+        ],
+        experts,
+        showRequester: true,
+      };
+    case 'wrong-network':
+      return {
+        kind: 'network',
+        hero: "Can't check this request on this network",
+        sentence: `So it stopped it. ${SIGNED_NOTHING}`,
+        note: null,
+        details: [{ label: 'Problem', value: why ?? "This network's LazorKit isn't the one this window knows." }, WHY_SHOWN],
+        experts,
+        showRequester: true,
+      };
+    case 'request-invalid':
+      return {
+        kind: 'invalid',
+        hero: "This request can't go through",
+        sentence: `Solana would refuse it. ${SIGNED_NOTHING}`,
+        note: `If it keeps happening, contact ${name}.`,
+        details: [{ label: 'Problem', value: why ?? 'Your account on Solana says this would fail.' }, { label: 'Source', value: 'From Solana' }],
+        experts,
+        showRequester: true,
+      };
+    case 'stale-counter':
+      return {
+        kind: 'stale',
+        hero: 'This request is out of date',
+        sentence: `Start it again from the app. ${SIGNED_NOTHING}`,
+        note: null,
+        details: [{ label: 'Problem', value: "Another approval from this passkey hasn't reached LazorKit yet." }],
+        experts,
+        showRequester: true,
+      };
+    case 'chain-unavailable':
+      return {
+        kind: 'unavailable',
+        hero: "LazorKit can't check this right now",
+        sentence: `So it stopped here. ${SIGNED_NOTHING}`,
+        note: null,
+        details: [{ label: 'Problem', value: "LazorKit couldn't read your account on Solana." }],
+        experts,
+        showRequester: true,
+        retry: true,
       };
     case 'requester-unknown':
       return {

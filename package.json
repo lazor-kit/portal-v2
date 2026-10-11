@@ -14,12 +14,13 @@
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "lint:checked": "eslint src/security src/pages src/components/*.tsx src/config.ts api test e2e",
+    "lint:checked": "eslint src/security src/chain src/approval src/typed src/hooks/use-recipient-check.ts src/pages src/components/*.tsx src/config.ts src/main.tsx api test e2e scripts/record-chain-fixtures.ts",
     "test": "node --test 'test/*.test.ts'",
     "typecheck:test": "tsc -p tsconfig.test.json",
     "headers": "node scripts/gen-headers.mjs",
     "headers:check": "node scripts/gen-headers.mjs --check",
     "e2e": "node e2e/run.mjs",
+    "e2e:typed": "node e2e/typed.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -87,6 +88,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.21.0",
+    "@lazorkit/sdk-legacy": "1.4.0",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",

@@ -1,6 +1,8 @@
 import { Ban, Check, KeyRound, Loader2, X } from "lucide-react"
 import { AddressChip, ShortAddress } from "@/components/address"
-import { Actions, AppSays, Body, Caption, Details, Hero, Note, PlainButton, Sentence, StatusMark } from "@/components/sheet"
+import { Actions, AppSays, Body, Caption, Details, Facts, Hero, Note, PlainButton, Sentence, StatusMark, TestChip } from "@/components/sheet"
+import { TypedHead } from "@/components/typed-review"
+import type { TypedScreen } from "@/typed/screen"
 
 /** What is being approved, as the review showed it: the same hero on the waiting, canceled and approved screens. */
 export interface Approving {
@@ -13,6 +15,8 @@ export interface Approving {
   readonly says?: string
   /** The receipt's sentence: what happens next. */
   readonly next: string
+  /** A typed request: the receipt repeats its card (and keeps its caution or danger block). */
+  readonly typed?: TypedScreen["receipt"] & { readonly testNetwork: boolean }
 }
 
 /**
@@ -145,11 +149,19 @@ export function Receipt({ approving, name, onBack }: { approving: Approving; nam
           <Check className="h-4 w-4" aria-hidden="true" />
           You approved
         </p>
-        <Hero size={approving.amount ? "amount" : "action"} eyebrow={approving.says ? <AppSays name={approving.says} /> : undefined}>
-          {approving.hero}
-        </Hero>
+        {approving.typed ? (
+          <>
+            <TypedHead screen={approving.typed} />
+            {approving.typed.testNetwork && <TestChip />}
+          </>
+        ) : (
+          <Hero size={approving.amount ? "amount" : "action"} eyebrow={approving.says ? <AppSays name={approving.says} /> : undefined}>
+            {approving.hero}
+          </Hero>
+        )}
         {approving.to && <AddressChip address={approving.to} prefix="to" testId="recipient" />}
-        <Sentence>{approving.next}</Sentence>
+        <Sentence testId="receipt-next">{approving.next}</Sentence>
+        {approving.typed && <Facts rows={approving.typed.facts.map((f) => ({ label: f.label, value: f.value }))} />}
       </Body>
       <Returning name={name} onBack={onBack} />
     </div>

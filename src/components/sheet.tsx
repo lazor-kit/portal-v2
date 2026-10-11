@@ -1,4 +1,4 @@
-import type { ReactNode } from "react"
+import { useState, type ReactNode } from "react"
 import { ChevronDown, Fingerprint, Info, OctagonAlert, Quote, TriangleAlert } from "lucide-react"
 import { buttonClass } from "@/lib/ui"
 import { portalHost } from "@/utils/portal"
@@ -81,6 +81,48 @@ export function DangerBlock({ title, children, testId = "danger" }: { title: str
           <p className="text-[16px] leading-[24px]">{children}</p>
         </div>
       </div>
+    </div>
+  )
+}
+
+/** The caution block: replaces the hero when the risk is what is asked (no total limit). */
+export function CautionBlock({ title, children, testId = "caution-block" }: { title: string; children: ReactNode; testId?: string }) {
+  return (
+    <div className="rounded-xl bg-caution-bg p-4 text-caution-ink" data-testid={testId}>
+      <div className="flex items-start gap-2.5">
+        <TriangleAlert className="mt-1 h-6 w-6 shrink-0" aria-hidden="true" />
+        <div className="space-y-1">
+          <h1 id={HERO_ID} className="text-[24px] leading-[30px] font-bold">
+            <span className="sr-only">Caution: </span>
+            {title}
+          </h1>
+          <p className="text-[16px] leading-[24px]">{children}</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** "Not real money": a request on a test network. Tapping it says so in full. */
+export function TestChip() {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="space-y-1">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-label="Not real money. Test mode on Solana Devnet"
+        className="flex min-h-11 items-center"
+        data-testid="test-chip"
+      >
+        <span className="inline-flex h-7 items-center rounded-full border-[1.5px] border-dashed border-ink-2 px-2.5 text-[13px] leading-4 font-bold text-ink-2">Not real money</span>
+      </button>
+      {open && (
+        <p className="text-[14px] leading-[20px] text-ink-2" data-testid="test-chip-note">
+          Test mode on Solana Devnet. Nothing here has real value.
+        </p>
+      )}
     </div>
   )
 }

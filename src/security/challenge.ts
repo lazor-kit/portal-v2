@@ -40,7 +40,13 @@ export type RefusalReason =
   | 'unrecognised-format'
   | 'display-text-mismatch'
   | 'payload-not-allowed'
-  | 'connect-challenge-not-proof';
+  | 'connect-challenge-not-proof'
+  /** A typed request (`#/?lk1=…`) that can't be read, or a `hashchange` after load. */
+  | 'typed-malformed'
+  /** A typed request of a version or kind this portal doesn't know. */
+  | 'typed-unsupported'
+  /** A typed request that doesn't recompute to the challenge sent, or names another passkey. */
+  | 'challenge-mismatch';
 
 export type ClassifiedChallenge =
   | { readonly kind: 'message'; readonly challenge: Uint8Array; readonly text: string }
