@@ -24,7 +24,7 @@ const registry = parseRegistry({ version: 1, apps: [{ id: 'fernway', name: 'Fern
 const requester: Requester = { channel: 'iframe', origin: 'https://www.fernway.example', evidence: 'ancestor-origins', embeddedIn: [], openedFrom: null, conflict: false, unsupported: false } as unknown as Requester;
 
 const createArgs = (actions = sample.solLimit(20_000_000n), expiresAt = NOW + 3n * 3600n) => ({ sessionKey: addr(), expiresAt: expiresAt.toString(), actions: base64urlEncode(actions) });
-const read = (w: ReturnType<typeof world>, config = CONFIG) => readTypedChain(w.chain.transport, w.req, { config, needsHoldings, sleep: async () => {}, floorWaitMs: 0 });
+const read = (w: ReturnType<typeof world>, config = CONFIG) => readTypedChain(w.chain.transport, w.req, { config, needsHoldings, sleep: async () => {}, retryDelaysMs: [1, 1, 1] });
 
 function evaluate(w: ReturnType<typeof world>, fragment: string, query: Record<string, string> = {}) {
   const search = new URLSearchParams({ action: 'sign', message: w.query.message, credentialId: w.query.credentialId, transaction: '', ...query });

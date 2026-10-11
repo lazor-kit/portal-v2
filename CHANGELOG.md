@@ -16,6 +16,12 @@
   On devnet, typed CreateSession is accepted from the program upgrade at
   slot 509609649 (the binary with Unix-time session expiry); on a cluster
   whose binary lacks it, the request is refused (`wrong-network`).
+  The chain reads behind a typed request ask for state at or past the slot
+  the app prepared at (`minContextSlot`) and check the Clock in the same
+  answer, so an RPC node that lags behind a load balancer can't make a new
+  wallet look missing: such answers are read again for about 9 seconds,
+  then the request is refused as `chain-unavailable` (Try again), never as
+  `request-invalid`.
 
 - The portal signs only recognised challenge formats: LazorKit signed
   messages (shown as their text, which must match the challenge),

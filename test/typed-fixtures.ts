@@ -5,7 +5,7 @@ import { Keypair, PublicKey } from '@solana/web3.js';
 import { base64urlEncode, decodeApprovalRequest, findProgramAddress, passkeyAuthorityAddress, preparedChallenge, type ApprovalRequest } from '../src/approval/index.ts';
 import type { Transport } from '../src/chain/transport.ts';
 import { RpcReadError } from '../src/chain/transport.ts';
-import { CLOCK_SYSVAR, UPGRADEABLE_LOADER } from '../src/typed/reads.ts';
+import { CLOCK_SYSVAR, SYSVAR_OWNER, UPGRADEABLE_LOADER } from '../src/typed/reads.ts';
 import type { ProgramConfig } from '../src/typed/programs.ts';
 
 export const PROGRAM = '57bTNWqtYTJbWuLWASKo6GqUTAK6oFDUR5c6hEc6V8nv';
@@ -99,10 +99,21 @@ export function mintData(decimals: number): Uint8Array {
   return d;
 }
 
+/**
+ * One `getMultipleAccounts` answer from a node behind the RPC's load
+ * balancer: `min-context-slot` (it refuses the floor, -32016), or old state
+ * under a context slot it claims (a Clock at `clockSlot`, `missing` accounts
+ * absent). `missing` alone, with no `clockSlot`, is a fresh answer that
+ * hasn't seen those accounts yet.
+ */
+export type Lag = 'min-context-slot' | { clockSlot?: bigint; missing?: readonly string[] };
+
 /** A chain of `accounts`, plus the program and its program data at `deploySlot`. */
 export class FakeChain {
   readonly accounts = new Map<string, Raw>();
   readonly calls: { method: string; params: readonly unknown[] }[] = [];
+  /** The next `getMultipleAccounts` answers, one per call, before the chain's own. */
+  lag: Lag[] = [];
   /** Throw this for every call (a network that can't be read). */
   failWith: Error | null = null;
   lamports = 1_250_000_000n;
@@ -129,13 +140,20 @@ export class FakeChain {
   transport: Transport = async (method, params) => {
     this.calls.push({ method, params });
     if (this.failWith) throw this.failWith;
-    const context = { slot: Number(SLOT) };
+    // The context slot is the Clock's, as at one commitment on a real node.
+    const clockAccount = this.accounts.get(CLOCK_SYSVAR);
+    const context = { slot: clockAccount ? Number(Buffer.from(clockAccount.data).readBigUInt64LE(0)) : Number(SLOT) };
     if (method === 'getMultipleAccounts') {
-      const [keys, config] = params as [string[], { dataSlice?: { offset: number; length: number } }];
+      const [keys, config] = params as [string[], { dataSlice?: { offset: number; length: number }; minContextSlot?: number }];
+      const lag = this.lag.shift();
+      if (lag === 'min-context-slot' || (config.minContextSlot !== undefined && config.minContextSlot > context.slot)) {
+        throw new RpcReadError('behind', 'getMultipleAccounts: Minimum context slot has not been reached', -32016);
+      }
+      const old = lag?.clockSlot;
       return {
         context,
         value: keys.map((k) => {
-          const a = this.accounts.get(k);
+          const a = k === CLOCK_SYSVAR && old !== undefined ? { owner: SYSVAR_OWNER, lamports: 1, data: clockData(old) } : lag?.missing?.includes(k) ? undefined : this.accounts.get(k);
           if (!a) return null;
           const data = config.dataSlice ? a.data.slice(config.dataSlice.offset, config.dataSlice.offset + config.dataSlice.length) : a.data;
           return { owner: a.owner, lamports: a.lamports, executable: false, rentEpoch: 0, data: [Buffer.from(data).toString('base64'), 'base64'] };

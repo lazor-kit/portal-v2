@@ -16,9 +16,12 @@ export type Cluster = 'mainnet' | 'devnet';
  * - `upstream`: the upstream failed or answered with a JSON-RPC error;
  * - `refused`: the route refused the request (a bug in the caller);
  * - `network`: the route could not be reached;
- * - `malformed`: the answer was not the shape asked for.
+ * - `malformed`: the answer was not the shape asked for;
+ * - `behind`: the answer came from a node behind the state the read needs
+ *   (it had not reached `minContextSlot`, or its own Clock says it is
+ *   older than the slot it claims). It says nothing about the chain.
  */
-export type ReadFailure = 'not-configured' | 'rate-limited' | 'timeout' | 'upstream' | 'refused' | 'network' | 'malformed';
+export type ReadFailure = 'not-configured' | 'rate-limited' | 'timeout' | 'upstream' | 'refused' | 'network' | 'malformed' | 'behind';
 
 /** The outcome of a read: a value, or why there is none. Never a guess. */
 export type Read<T> = { readonly status: 'ok'; readonly value: T } | { readonly status: 'unavailable'; readonly reason: ReadFailure };
@@ -40,6 +43,13 @@ export class RpcReadError extends Error {
 export type Transport = (method: string, params: readonly unknown[]) => Promise<unknown>;
 
 export const failureOf = (error: unknown): ReadFailure => (error instanceof RpcReadError ? error.reason : 'malformed');
+
+/** JSON-RPC -32016, "Minimum context slot has not been reached" (some providers send only the text). */
+export const MIN_CONTEXT_SLOT_NOT_REACHED = -32016;
+
+function behindMinContextSlot(code: number | null, message: unknown): boolean {
+  return code === MIN_CONTEXT_SLOT_NOT_REACHED || (typeof message === 'string' && /minimum context slot has not been reached/i.test(message));
+}
 
 function failureForStatus(status: number): ReadFailure {
   if (status === 503) return 'not-configured';
@@ -80,11 +90,15 @@ export function portalTransport(
       throw new RpcReadError(response.ok ? 'malformed' : failureForStatus(response.status), `${method}: answer is not JSON (${response.status})`);
     }
     const error = typeof body === 'object' && body !== null ? (body as { error?: { code?: unknown; message?: unknown } }).error : undefined;
+    const code = typeof error?.code === 'number' ? error.code : null;
+    if (error !== undefined && behindMinContextSlot(code, error?.message)) {
+      throw new RpcReadError('behind', `${method}: ${String(error?.message ?? 'minimum context slot has not been reached')}`, code);
+    }
     if (!response.ok) {
-      throw new RpcReadError(failureForStatus(response.status), `${method}: ${String(error?.message ?? response.status)}`, typeof error?.code === 'number' ? error.code : null);
+      throw new RpcReadError(failureForStatus(response.status), `${method}: ${String(error?.message ?? response.status)}`, code);
     }
     if (error !== undefined) {
-      throw new RpcReadError('upstream', `${method}: ${String(error?.message ?? 'error')}`, typeof error?.code === 'number' ? error.code : null);
+      throw new RpcReadError('upstream', `${method}: ${String(error?.message ?? 'error')}`, code);
     }
     if (typeof body !== 'object' || body === null || !('result' in body)) {
       throw new RpcReadError('malformed', `${method}: answer has no result`);

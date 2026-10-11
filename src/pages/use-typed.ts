@@ -3,7 +3,7 @@ import type { ApprovalRequest } from "@/approval/envelope"
 import { portalTransport, type Transport } from "@/chain/transport"
 import { programs } from "@/config"
 import { bindAtApprove, SNAPSHOT_INTERVAL_MS, snapshotVerdict, type BindResult } from "@/typed/approve"
-import { readDeploySlot, readSnapshot, readTypedChain, type Snapshot, type TypedChainView } from "@/typed/reads"
+import { readDeploySlot, readFloor, readSnapshot, readTypedChain, type Snapshot, type TypedChainView } from "@/typed/reads"
 import { needsHoldings } from "@/typed/screen"
 
 export type TypedState =
@@ -11,8 +11,19 @@ export type TypedState =
   | { readonly phase: "refused"; readonly code: "wrong-network" | "request-invalid" | "chain-unavailable" | "stale-counter"; readonly reason?: string }
   | { readonly phase: "ready"; readonly view: TypedChainView }
 
-/** The binary is read once per page (DESIGN §3.1). */
+/** The binary is read once per page (DESIGN §3.1); a read that fails is read again on the next try. */
 const deploySlots = new Map<string, Promise<number | null>>()
+
+/**
+ * The newest slot this page has seen per cluster, from fresh answers only.
+ * Every later read is asked of a node at or past it, so a lagging node
+ * behind the RPC's load balancer can't take the page back in time.
+ */
+const observedSlots = new Map<string, number>()
+const observe = (cluster: string, slot: bigint) => {
+  const n = Number(slot)
+  if (Number.isSafeInteger(n) && n > (observedSlots.get(cluster) ?? 0)) observedSlots.set(cluster, n)
+}
 
 /**
  * A typed request's chain state: read once when it is shown (refusing what
@@ -52,15 +63,22 @@ export function useTyped(
       const deploySlot = () => {
         let deploy = deploySlots.get(key)
         if (!deploy) {
-          deploy = readDeploySlot(transport, request.programId).catch(() => {
+          // A failure is not "another binary": it is thrown, and the request is chain-unavailable (Try again).
+          deploy = readDeploySlot(transport, request.programId, { minContextSlot: readFloor(request, observedSlots.get(request.cluster)) }).catch((error: unknown) => {
             deploySlots.delete(key)
-            return null
+            throw error
           })
           deploySlots.set(key, deploy)
         }
         return deploy
       }
-      const result = await readTypedChain(transport, request, { config: programs[request.cluster], deploySlot, needsHoldings })
+      const result = await readTypedChain(transport, request, {
+        config: programs[request.cluster],
+        deploySlot,
+        needsHoldings,
+        observedSlot: observedSlots.get(request.cluster),
+      })
+      if (result.ok) observe(request.cluster, result.view.clock.slot)
       if (cancelled) return
       setState(result.ok ? { phase: "ready", view: result.view } : { phase: "refused", code: result.code, reason: result.reason })
     }
@@ -80,13 +98,15 @@ export function useTyped(
     goneSince.current = null
     const tick = async () => {
       try {
-        const next = await readSnapshot(transport, request, () => performance.now())
+        const floor = readFloor(request, observedSlots.get(request.cluster))
+        const next = await readSnapshot(transport, request, () => performance.now(), floor)
         if (cancelled) return
         if (!next) {
           goneSince.current ??= performance.now()
           return
         }
         goneSince.current = null
+        observe(request.cluster, next.slot)
         lastGoodAt.current = next.at
         snapshot.current = next
         if (next.counter + 1 < request.counter) {
@@ -95,8 +115,9 @@ export function useTyped(
           behindSince.current = null
         }
       } catch {
-        // A failed refresh leaves the last snapshot to age out; with none
-        // usable for too long, the verdict below refuses.
+        // A failed refresh, or one from a node behind the newest slot seen,
+        // leaves the last snapshot to age out; with none usable for too
+        // long, the verdict below refuses (chain-unavailable, Try again).
       }
     }
     const evaluate = () => {

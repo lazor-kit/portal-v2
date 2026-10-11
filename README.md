@@ -78,6 +78,17 @@ RemoveAuthority:
   the session or the authority to remove, the mints the limits name, and the
   vault when a "could spend all" line needs it. What the program would refuse
   is refused here.
+- Every one of these reads, and every snapshot below, is asked of a node at
+  or past the request's `preparedSlot` and `minContextSlot` and the newest
+  slot the page has seen (`minContextSlot` on the call), and carries the
+  Clock: an answer whose Clock is before that slot, or more than 32 slots
+  from the slot the answer claims, is from a node behind the RPC's load
+  balancer. Such answers, and "minimum context slot not reached", are read
+  again after 0.4, 0.8, 1.6, 3.2 and 3.2 seconds, then the request is
+  refused as `chain-unavailable` (Try again). `request-invalid` needs two
+  fresh answers in a row, the second asked at or past the first, so an
+  account the app has just created is never refused as missing because one
+  node had not seen it yet.
 - While the screen is open the portal reads the authority's counter and the
   Clock once a second. Approve signs with that slot and the chain's counter
   + 1 (never below the SDK's), picked inside the click: the program's
@@ -341,16 +352,18 @@ methods are forwarded, each with its parameters checked
 
 | Method | Accepted |
 |---|---|
-| `getMultipleAccounts` | 1 to 100 addresses, `base64` |
+| `getMultipleAccounts` | 1 to 100 addresses, `base64`, optional `dataSlice` and `minContextSlot` |
 | `simulateTransaction` | a base64 transaction of at most 2048 characters, `sigVerify` off, at most 128 accounts returned |
 | `getLatestBlockhash`, `isBlockhashValid` | commitment and `minContextSlot` only |
-| `getAccountInfo` | one address, `base64`, optional `dataSlice` |
+| `getAccountInfo` | one address, `base64`, optional `dataSlice` and `minContextSlot` |
 | `getBalance` | one address |
 | `getTokenAccountsByOwner` | one owner, by mint or by program (SPL Token or Token-2022 only), `base64` or `jsonParsed` |
 | `getProgramAccounts` | the LazorKit v2 program of the request's cluster only, `base64`, with exactly two filters: one account type (Authority, Session or DeferredExec) and one wallet at that type's wallet offset |
 | `getSignaturesForAddress` | one address, the newest 1 to 1000 signatures (no `before` or `until`), `confirmed` or `finalized` |
 | `getTransaction` | one signature, `json`, `jsonParsed` or `base64`, transaction version 0 or 1, `confirmed` or `finalized` |
 
+- **`minContextSlot`**, wherever a method takes it, must be a whole number
+  from 0 to 2^53 - 1, and is forwarded unchanged.
 - **Budget.** Each client address (an IPv6 client by its /64) has a budget
   of request cost: 300, refilled at 5 a second. A program listing costs 10,
   a signature list 5, a simulation or token listing 2, anything else 1.

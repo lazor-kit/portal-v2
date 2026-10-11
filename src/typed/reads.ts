@@ -12,6 +12,18 @@
  *
  * The same call, reduced to the authority and the Clock, is the snapshot the
  * Approve click signs from (`readSnapshot`).
+ *
+ * Every one of these reads is asked of a node at or past a floor slot
+ * (`minContextSlot`): the request's `preparedSlot` and `minContextSlot`, and
+ * the newest slot the page has already seen. The Clock read in the same call
+ * must agree: at or past the floor, and within `MAX_CLOCK_SKEW_SLOTS` of the
+ * slot the answer claims. An RPC behind a load balancer can hand back a
+ * lagging node's state under a current context slot; such an answer is
+ * `behind`, read again after a pause, and after `READ_RETRY_DELAYS_MS` the
+ * request is refused as `chain-unavailable` (Try again). Only fresh answers
+ * decide anything, and a `request-invalid` needs two fresh answers in a row,
+ * the second at or past the first: an account the app has just created may
+ * not have reached the first node asked.
  */
 import { sha256 } from '@noble/hashes/sha256';
 import { decodeActions, type Action } from '../approval/actions.ts';
@@ -55,24 +67,63 @@ async function multipleAccounts(transport: Transport, keys: readonly string[], c
   return { slot: result.context.slot, accounts };
 }
 
-/** JSON-RPC "Minimum context slot has not been reached". */
-const behindFloor = (error: unknown) => error instanceof RpcReadError && error.code === -32016;
+/** The owner of every sysvar account, the Clock included. */
+export const SYSVAR_OWNER = 'Sysvar1111111111111111111111111111111111111';
 
 /**
- * Retries a read while the node is behind the request's `minContextSlot`, for
- * up to `waitMs`; any other failure is thrown at once.
+ * How far the Clock in an answer may be from the slot the answer claims. At
+ * one commitment the two are the same bank's, so equal; a node that serves
+ * state from far behind the context it reports is not answering for now.
  */
-async function atFloor<T>(read: () => Promise<T>, waitMs: number, sleep: (ms: number) => Promise<void>): Promise<T> {
-  const deadline = Date.now() + waitMs;
-  for (;;) {
+export const MAX_CLOCK_SKEW_SLOTS = 32n;
+
+/** The pauses between reads while answers are behind (about 9 s in all), and before the read that confirms a refusal. */
+export const READ_RETRY_DELAYS_MS: readonly number[] = [400, 800, 1600, 3200, 3200];
+
+const behind = (error: unknown) => error instanceof RpcReadError && error.reason === 'behind';
+
+/**
+ * The slot a typed request's reads must be at or past: the newest of its
+ * `minContextSlot`, its `preparedSlot` (the SDK read the chain there, so
+ * every account it prepared from exists there) and `observed`, the newest
+ * slot this page has already seen. 0 means no floor.
+ */
+export function readFloor(req: ApprovalRequest, observed = 0): number {
+  const prepared = req.preparedSlot <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(req.preparedSlot) : 0;
+  return Math.max(req.minContextSlot ?? 0, prepared, observed);
+}
+
+/**
+ * `keys` and the Clock in one `getMultipleAccounts`, asked of a node at or
+ * past `floor`. Throws `behind` when the node had not reached it, or when the
+ * answer's own Clock is before `floor` or more than `MAX_CLOCK_SKEW_SLOTS`
+ * from the slot the answer claims.
+ */
+async function freshAccounts(transport: Transport, keys: readonly string[], floor: number, config: Obj = {}): Promise<{ clock: Clock; accounts: (RawAccount | null)[] }> {
+  const { slot, accounts } = await multipleAccounts(transport, [...keys, CLOCK_SYSVAR], floor > 0 ? { ...config, minContextSlot: floor } : config);
+  const clockAcc = accounts[keys.length];
+  const clock = clockAcc && clockAcc.owner === SYSVAR_OWNER ? decodeClock(clockAcc.data) : null;
+  if (!clock) throw malformed('clock');
+  const skew = BigInt(slot) - clock.slot;
+  if (clock.slot < BigInt(floor) || skew > MAX_CLOCK_SKEW_SLOTS || skew < -MAX_CLOCK_SKEW_SLOTS) {
+    throw new RpcReadError('behind', `the answer's Clock is at slot ${clock.slot}, its context at ${slot}, the floor at ${floor}`);
+  }
+  return { clock, accounts: accounts.slice(0, keys.length) };
+}
+
+/** `read`, again after each of `delays` while it throws `behind`; any other failure, or the last `behind`, is thrown. */
+async function untilFresh<T>(read: () => Promise<T>, delays: readonly number[], sleep: (ms: number) => Promise<void>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
     try {
       return await read();
     } catch (error) {
-      if (!behindFloor(error) || Date.now() >= deadline) throw error;
-      await sleep(400);
+      if (!behind(error) || attempt >= delays.length) throw error;
+      await sleep(delays[attempt]);
     }
   }
 }
+
+const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export interface Clock {
   readonly slot: bigint;
@@ -98,10 +149,23 @@ export function decodeMint(account: RawAccount | null): MintRead {
   return { kind: 'mint', decimals: account.data[44], program };
 }
 
-/** The binary on the cluster: its last-deploy slot, or why it could not be read. */
-export async function readDeploySlot(transport: Transport, programId: string): Promise<number | null> {
+export interface DeployReadOptions {
+  /** The slot the read must be at or past (`readFloor`). */
+  readonly minContextSlot?: number;
+  readonly retryDelaysMs?: readonly number[];
+  readonly sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * The binary on the cluster: its last-deploy slot, or null when the program
+ * is not an upgradeable program. Read fresh (see `freshAccounts`); a read
+ * that stays behind, or fails, throws: an old answer must not pass for
+ * another binary.
+ */
+export async function readDeploySlot(transport: Transport, programId: string, options: DeployReadOptions = {}): Promise<number | null> {
   const [programData] = findProgramAddress([addressOf(programId)], UPGRADEABLE_LOADER);
-  const { accounts } = await multipleAccounts(transport, [programId, programData], { dataSlice: { offset: 0, length: 45 } });
+  const read = () => freshAccounts(transport, [programId, programData], options.minContextSlot ?? 0, { dataSlice: { offset: 0, length: 45 } });
+  const { accounts } = await untilFresh(read, options.retryDelaysMs ?? READ_RETRY_DELAYS_MS, options.sleep ?? defaultSleep);
   const [program, data] = accounts;
   if (!program || !data || program.owner !== UPGRADEABLE_LOADER || data.owner !== UPGRADEABLE_LOADER) return null;
   if (program.data.length < 36 || readU32(program.data, 0) !== 2 || !bytesEqual(program.data.subarray(4, 36), addressOf(programData))) return null;
@@ -155,8 +219,10 @@ export interface ReadOptions {
    * cluster that isn't configured.
    */
   readonly deploySlot?: number | null | (() => Promise<number | null>);
-  /** How long to wait for a node at or past `minContextSlot`. */
-  readonly floorWaitMs?: number;
+  /** The newest slot this page has already seen: reads are asked of nodes at or past it too. */
+  readonly observedSlot?: number;
+  /** The pauses between reads while answers are behind, and before the read that confirms a refusal. */
+  readonly retryDelaysMs?: readonly number[];
   readonly sleep?: (ms: number) => Promise<void>;
   /** Whether the screen will need the vault's holdings (a "could spend all X" line). */
   readonly needsHoldings?: (req: ApprovalRequest, mints: Readonly<Record<string, MintRead>>, now: bigint) => boolean;
@@ -173,16 +239,22 @@ export function namedMints(actions: readonly Action[]): string[] {
 
 /**
  * Reads and checks everything `req` needs, refusing what would fail on chain
- * (DESIGN §3.4). Pure but for `transport`.
+ * (DESIGN §3.4). Pure but for `transport` and `sleep`.
+ *
+ * Answers that are behind are read again (`READ_RETRY_DELAYS_MS`), then the
+ * request is `chain-unavailable`. A `request-invalid` is returned only when
+ * two fresh answers in a row say so, the second asked at or past the first.
  */
 export async function readTypedChain(transport: Transport, req: ApprovalRequest, options: ReadOptions): Promise<TypedRead> {
   const { config } = options;
   if (!config || config.programId !== req.programId) return { ok: false, code: 'wrong-network', reason: `LazorKit isn't set up for this program on ${req.cluster}.` };
-  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  const floor = req.minContextSlot === undefined ? {} : { minContextSlot: req.minContextSlot };
+  const sleep = options.sleep ?? defaultSleep;
+  const delays = options.retryDelaysMs ?? READ_RETRY_DELAYS_MS;
+  let floor = readFloor(req, options.observedSlot);
   try {
     const known = options.deploySlot;
-    const deploySlot = typeof known === 'function' ? await known() : known !== undefined ? known : await readDeploySlot(transport, req.programId);
+    const deploySlot =
+      typeof known === 'function' ? await known() : known !== undefined ? known : await readDeploySlot(transport, req.programId, { minContextSlot: floor, retryDelaysMs: delays, sleep });
     const binary = deploySlot !== null && deploySlot === config.lastDeploySlot ? 'configured' : 'unknown';
     const features = new Set<Feature>(binary === 'configured' ? config.features : []);
     if (req.kind === 'createSession' && !REQUIRED_FEATURES.createSession.every((f) => features.has(f))) {
@@ -190,85 +262,114 @@ export async function readTypedChain(transport: Transport, req: ApprovalRequest,
     }
     if (!config.features.includes('wallet-bound-challenge')) return { ok: false, code: 'wrong-network', reason: "The LazorKit program on this network doesn't sign this way." };
 
-    const vault = vaultAddressOf(req.programId, req.wallet);
     const kindKeys =
       req.kind === 'createSession'
         ? [sessionAddress(req.programId, req.wallet, req.args.sessionKey), ...namedMints(req.args.decoded)]
         : req.kind === 'revokeSession'
           ? [req.args.session]
           : [req.args.target];
-    const keys = [req.wallet, req.authority, CLOCK_SYSVAR, ...kindKeys];
-    const { accounts } = await atFloor(() => multipleAccounts(transport, keys, floor), options.floorWaitMs ?? 10_000, sleep);
-    const [walletAcc, authorityAcc, clockAcc, ...rest] = accounts;
+    const keys = [req.wallet, req.authority, ...kindKeys];
 
-    const clock = clockAcc ? decodeClock(clockAcc.data) : null;
-    if (!clock) throw malformed('clock');
-    if (!walletAcc || walletAcc.owner !== req.programId || walletAcc.data.length < 8 || walletAcc.data[0] !== DISCRIMINATOR.wallet) {
-      return invalid("The account it names isn't a LazorKit account on this network.");
+    /** The first fresh answer's refusal, waiting for a second fresh answer to confirm it. */
+    let refusal: TypedRead | null = null;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const { clock, accounts } = await freshAccounts(transport, keys, floor);
+        // The next read, if any, is asked of a node at least this far.
+        floor = Math.max(floor, Number(clock.slot));
+        const checked = checkTypedState(req, keys, accounts, clock, features, binary);
+        if (checked.ok) return await withHoldings(transport, req, checked, options);
+        if (refusal) return checked;
+        refusal = checked;
+      } catch (error) {
+        if (!behind(error)) throw error;
+      }
+      if (attempt >= delays.length) {
+        return { ok: false, code: 'chain-unavailable', reason: "The network's answers were out of date; LazorKit couldn't check this request." };
+      }
+      await sleep(delays[attempt]);
     }
-    const ownerCount = readU32(walletAcc.data, 4);
-    const signer = authorityAcc && authorityAcc.owner === req.programId ? decodeAuthority(req.authority, authorityAcc.data) : null;
-    if (!signer) return invalid("The passkey it names isn't part of this account.");
-    if (signer.wallet !== req.wallet) return invalid('The passkey it names belongs to another account.');
-    if (signer.key.type !== 'passkey' || signer.key.credentialIdHash !== hex(sha256(req.credentialId))) return invalid("The passkey it names isn't the one asked to sign.");
-    if (signer.role === 'spender') return invalid("This passkey can't make this change.");
-    if (signer.counter >= 0xffff_ffff) return invalid("This passkey can't sign any more changes.");
-    if (passkeyAuthorityAddress(req.programId, req.wallet, req.credentialId) !== req.authority) return invalid("The passkey it names isn't the one asked to sign.");
-
-    const cannotPayOrReceive = new Set([req.wallet, vault, req.authority]);
-    let view: TypedChainView = { features, binary, clock, ownerCount, signer, vault, mints: {} };
-
-    if (req.kind === 'createSession') {
-      if (signer.policy) return invalid("This passkey has spending limits of its own, so it can't give out a permission.");
-      const now = clock.unixTimestamp;
-      if (req.args.expiresAt <= now) return invalid('It would end before it starts.');
-      if (req.args.expiresAt > now + 30n * 86_400n) return invalid('It would last more than 30 days, the most LazorKit allows.');
-      const [sessionAcc, ...mintAccs] = rest;
-      if (sessionAcc && sessionAcc.data.length > 0) return invalid('This permission already exists.');
-      const session = keys[3];
-      if (cannotPayOrReceive.has(req.payer) || req.payer === session) return invalid("The fee payer it names can't pay for this.");
-      const mints: Record<string, MintRead> = {};
-      namedMints(req.args.decoded).forEach((mint, i) => {
-        mints[mint] = decodeMint(mintAccs[i] ?? null);
-      });
-      for (const [mint, read] of Object.entries(mints)) {
-        const known = knownToken(req.cluster, mint);
-        if (known && (read.kind !== 'mint' || read.decimals !== known.decimals)) return invalid(`Solana doesn't describe ${known.symbol} the way LazorKit knows it.`);
-      }
-      view = { ...view, mints };
-      if (options.needsHoldings?.(req, mints, now)) {
-        const holdings = await readVault(transport, vault);
-        view = { ...view, holdings: holdings.status === 'ok' ? holdings.value : null };
-      }
-    } else if (req.kind === 'revokeSession') {
-      const [sessionAcc] = rest;
-      const session = sessionAcc && sessionAcc.owner === req.programId ? decodeSession(req.args.session, sessionAcc.data) : null;
-      if (!session) return invalid("The permission to stop doesn't exist.");
-      if (session.wallet !== req.wallet) return invalid('The permission to stop belongs to another account.');
-      const rules = decodeActions(session.actions, { forNewSession: false });
-      if (!rules.ok) return invalid("LazorKit can't read the permission's limits.");
-      if (cannotPayOrReceive.has(req.payer) || req.payer === req.args.session) return invalid("The fee payer it names can't pay for this.");
-      if (cannotPayOrReceive.has(req.args.refund) || req.args.refund === req.args.session) return invalid("The deposit can't go back to the address it names.");
-      view = { ...view, session: { ...session, rules: rules.actions } };
-    } else {
-      const [targetAcc] = rest;
-      const target = targetAcc && targetAcc.owner === req.programId ? decodeAuthority(req.args.target, targetAcc.data) : null;
-      if (!target) return invalid("The device or key to remove isn't part of this account.");
-      if (target.wallet !== req.wallet) return invalid('The device or key to remove belongs to another account.');
-      if (req.args.target === req.authority) return invalid("A passkey can't remove itself.");
-      if (!canRemove(signer.role, target.role, ownerCount)) {
-        return invalid(target.role === 'owner' && ownerCount <= 1 ? "It's the last device with full control." : "This passkey can't remove that device or key.");
-      }
-      const rules = target.policy ? decodeActions(target.policy, { forNewSession: false }) : { ok: true as const, actions: [] };
-      if (!rules.ok) return invalid("LazorKit can't read that key's limits.");
-      if (cannotPayOrReceive.has(req.payer) || req.payer === req.args.target) return invalid("The fee payer it names can't pay for this.");
-      if (cannotPayOrReceive.has(req.args.refund) || req.args.refund === req.args.target) return invalid("The deposit can't go back to the address it names.");
-      view = { ...view, target: { ...target, rules: rules.actions } };
-    }
-    return { ok: true, view };
   } catch (error) {
     return { ok: false, code: 'chain-unavailable', reason: error instanceof Error ? error.message : 'read failed' };
   }
+}
+
+/** The vault's holdings, added to an accepted createSession's view when a "could spend all" line needs them. */
+async function withHoldings(transport: Transport, req: ApprovalRequest, read: Extract<TypedRead, { ok: true }>, options: ReadOptions): Promise<TypedRead> {
+  if (req.kind !== 'createSession' || !options.needsHoldings?.(req, read.view.mints, read.view.clock.unixTimestamp)) return read;
+  const holdings = await readVault(transport, read.view.vault);
+  return { ok: true, view: { ...read.view, holdings: holdings.status === 'ok' ? holdings.value : null } };
+}
+
+/** What one fresh answer says about `req`: the view to show, or why the program would refuse it. */
+function checkTypedState(
+  req: ApprovalRequest,
+  keys: readonly string[],
+  accounts: readonly (RawAccount | null)[],
+  clock: Clock,
+  features: ReadonlySet<Feature>,
+  binary: TypedChainView['binary'],
+): TypedRead {
+  const vault = vaultAddressOf(req.programId, req.wallet);
+  const [walletAcc, authorityAcc, ...rest] = accounts;
+  if (!walletAcc || walletAcc.owner !== req.programId || walletAcc.data.length < 8 || walletAcc.data[0] !== DISCRIMINATOR.wallet) {
+    return invalid("The account it names isn't a LazorKit account on this network.");
+  }
+  const ownerCount = readU32(walletAcc.data, 4);
+  const signer = authorityAcc && authorityAcc.owner === req.programId ? decodeAuthority(req.authority, authorityAcc.data) : null;
+  if (!signer) return invalid("The passkey it names isn't part of this account.");
+  if (signer.wallet !== req.wallet) return invalid('The passkey it names belongs to another account.');
+  if (signer.key.type !== 'passkey' || signer.key.credentialIdHash !== hex(sha256(req.credentialId))) return invalid("The passkey it names isn't the one asked to sign.");
+  if (signer.role === 'spender') return invalid("This passkey can't make this change.");
+  if (signer.counter >= 0xffff_ffff) return invalid("This passkey can't sign any more changes.");
+  if (passkeyAuthorityAddress(req.programId, req.wallet, req.credentialId) !== req.authority) return invalid("The passkey it names isn't the one asked to sign.");
+
+  const cannotPayOrReceive = new Set([req.wallet, vault, req.authority]);
+  const view: TypedChainView = { features, binary, clock, ownerCount, signer, vault, mints: {} };
+
+  if (req.kind === 'createSession') {
+    if (signer.policy) return invalid("This passkey has spending limits of its own, so it can't give out a permission.");
+    const now = clock.unixTimestamp;
+    if (req.args.expiresAt <= now) return invalid('It would end before it starts.');
+    if (req.args.expiresAt > now + 30n * 86_400n) return invalid('It would last more than 30 days, the most LazorKit allows.');
+    const [sessionAcc, ...mintAccs] = rest;
+    if (sessionAcc && sessionAcc.data.length > 0) return invalid('This permission already exists.');
+    const session = keys[2];
+    if (cannotPayOrReceive.has(req.payer) || req.payer === session) return invalid("The fee payer it names can't pay for this.");
+    const mints: Record<string, MintRead> = {};
+    namedMints(req.args.decoded).forEach((mint, i) => {
+      mints[mint] = decodeMint(mintAccs[i] ?? null);
+    });
+    for (const [mint, read] of Object.entries(mints)) {
+      const known = knownToken(req.cluster, mint);
+      if (known && (read.kind !== 'mint' || read.decimals !== known.decimals)) return invalid(`Solana doesn't describe ${known.symbol} the way LazorKit knows it.`);
+    }
+    return { ok: true, view: { ...view, mints } };
+  }
+  if (req.kind === 'revokeSession') {
+    const [sessionAcc] = rest;
+    const session = sessionAcc && sessionAcc.owner === req.programId ? decodeSession(req.args.session, sessionAcc.data) : null;
+    if (!session) return invalid("The permission to stop doesn't exist.");
+    if (session.wallet !== req.wallet) return invalid('The permission to stop belongs to another account.');
+    const rules = decodeActions(session.actions, { forNewSession: false });
+    if (!rules.ok) return invalid("LazorKit can't read the permission's limits.");
+    if (cannotPayOrReceive.has(req.payer) || req.payer === req.args.session) return invalid("The fee payer it names can't pay for this.");
+    if (cannotPayOrReceive.has(req.args.refund) || req.args.refund === req.args.session) return invalid("The deposit can't go back to the address it names.");
+    return { ok: true, view: { ...view, session: { ...session, rules: rules.actions } } };
+  }
+  const [targetAcc] = rest;
+  const target = targetAcc && targetAcc.owner === req.programId ? decodeAuthority(req.args.target, targetAcc.data) : null;
+  if (!target) return invalid("The device or key to remove isn't part of this account.");
+  if (target.wallet !== req.wallet) return invalid('The device or key to remove belongs to another account.');
+  if (req.args.target === req.authority) return invalid("A passkey can't remove itself.");
+  if (!canRemove(signer.role, target.role, ownerCount)) {
+    return invalid(target.role === 'owner' && ownerCount <= 1 ? "It's the last device with full control." : "This passkey can't remove that device or key.");
+  }
+  const rules = target.policy ? decodeActions(target.policy, { forNewSession: false }) : { ok: true as const, actions: [] };
+  if (!rules.ok) return invalid("LazorKit can't read that key's limits.");
+  if (cannotPayOrReceive.has(req.payer) || req.payer === req.args.target) return invalid("The fee payer it names can't pay for this.");
+  if (cannotPayOrReceive.has(req.args.refund) || req.args.refund === req.args.target) return invalid("The deposit can't go back to the address it names.");
+  return { ok: true, view: { ...view, target: { ...target, rules: rules.actions } } };
 }
 
 const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
@@ -283,15 +384,15 @@ export interface Snapshot {
 }
 
 /**
- * The snapshot: one `getMultipleAccounts` of the authority and the Clock.
- * Null when the signing authority is no longer this wallet's (removed while
- * the screen is open); a read that fails, or a Clock that isn't one, throws.
+ * The snapshot: one `getMultipleAccounts` of the authority and the Clock,
+ * asked of a node at or past `floor` (`readFloor`, with the newest slot the
+ * page has seen). Null when a fresh answer says the signing authority is no
+ * longer this wallet's (removed while the screen is open); a read that fails,
+ * a Clock that isn't one, or an answer that is behind, throws.
  */
-export async function readSnapshot(transport: Transport, req: ApprovalRequest, now: () => number): Promise<Snapshot | null> {
-  const { accounts } = await multipleAccounts(transport, [req.authority, CLOCK_SYSVAR], {});
-  const [authorityAcc, clockAcc] = accounts;
-  const clock = clockAcc ? decodeClock(clockAcc.data) : null;
-  if (!clock) throw malformed('clock');
+export async function readSnapshot(transport: Transport, req: ApprovalRequest, now: () => number, floor = readFloor(req)): Promise<Snapshot | null> {
+  const { clock, accounts } = await freshAccounts(transport, [req.authority], floor);
+  const [authorityAcc] = accounts;
   const authority = authorityAcc && authorityAcc.owner === req.programId ? decodeAuthority(req.authority, authorityAcc.data) : null;
   if (!authority || authority.wallet !== req.wallet) return null;
   return { counter: authority.counter, slot: clock.slot, unixTimestamp: clock.unixTimestamp, at: now() };
