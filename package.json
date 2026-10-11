@@ -14,7 +14,7 @@
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "lint:checked": "eslint src/security src/pages src/components/*.tsx src/config.ts api test e2e",
+    "lint:checked": "eslint src/security src/chain src/hooks/use-recipient-check.ts src/pages src/components/*.tsx src/config.ts api test e2e scripts/record-chain-fixtures.ts",
     "test": "node --test 'test/*.test.ts'",
     "typecheck:test": "tsc -p tsconfig.test.json",
     "headers": "node scripts/gen-headers.mjs",

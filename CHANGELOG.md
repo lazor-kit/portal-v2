@@ -55,6 +55,13 @@
   preview deployments). `/api/rpc` and `/api/telemetry` answer the portal's
   own pages on any domain it is served from, plus `PORTAL_ORIGIN`. The client
   bundle holds no RPC URL or key.
+- `/api/rpc` also serves read-only chain reads for display: account, balance
+  and token accounts, the LazorKit v2 program's Authority, Session and
+  DeferredExec accounts of one wallet, and transaction history. Each method's
+  parameters are checked, each client address has a request budget, and
+  finalized transactions are kept in memory (an answer from memory costs no
+  budget). Signature lists are the newest only, without paging. The RPC
+  upstreams must serve `getProgramAccounts` and transaction history.
 - The preview is simulated on the network its blockhash belongs to; a failed
   simulation on a known network shows a red banner and makes "Approve
   anyway" the secondary button. When the network cannot be confirmed, a
