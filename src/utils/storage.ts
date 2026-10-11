@@ -62,3 +62,26 @@ export function rememberCredential(credentialId: string, entry: StoredCredential
   store[credentialId] = { ...store[credentialId], ...entry };
   write(store);
 }
+
+const APPROVED_BEFORE = 'lazorkit-portal:approved-before';
+
+/**
+ * Whether a passkey approval finished on this browser before (per app inside
+ * an app's page, where storage is partitioned). Unknown counts as no, so the
+ * longer passkey note shows rather than goes missing.
+ */
+export function approvedBefore(): boolean {
+  try {
+    return localStorage.getItem(APPROVED_BEFORE) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function rememberApproval(): void {
+  try {
+    localStorage.setItem(APPROVED_BEFORE, '1');
+  } catch {
+    // Storage unavailable: the longer note shows again next time.
+  }
+}

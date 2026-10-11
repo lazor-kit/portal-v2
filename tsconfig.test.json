@@ -13,6 +13,8 @@
   "include": [
     "src/security",
     "src/chain",
+    "src/approval",
+    "src/typed",
     "test",
     "api",
     "scripts/record-chain-fixtures.ts"

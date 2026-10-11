@@ -268,3 +268,39 @@ test('a valid key list is forwarded unchanged', async () => {
   await handleRpc(post({ jsonrpc: '2.0', id: 'a', method: 'getMultipleAccounts', params: [[key], { encoding: 'base64', commitment: 'confirmed' }] }), deps(upstream(calls)));
   assert.deepEqual(calls[0].body, { jsonrpc: '2.0', id: 'a', method: 'getMultipleAccounts', params: [[key], { encoding: 'base64', commitment: 'confirmed' }] });
 });
+
+test('minContextSlot: a whole slot is forwarded unchanged on account reads; anything else is refused', async () => {
+  const calls: Call[] = [];
+  const key = Keypair.generate().publicKey.toBase58();
+  const forwarded = [
+    { method: 'getMultipleAccounts', params: [[key], { encoding: 'base64', commitment: 'confirmed', minContextSlot: 412388000 }] },
+    { method: 'getMultipleAccounts', params: [[key], { encoding: 'base64', commitment: 'confirmed', minContextSlot: 0, dataSlice: { offset: 0, length: 45 } }] },
+    { method: 'getAccountInfo', params: [key, { encoding: 'base64', commitment: 'confirmed', minContextSlot: Number.MAX_SAFE_INTEGER }] },
+  ];
+  for (const body of forwarded) {
+    const r = await handleRpc(post({ jsonrpc: '2.0', id: 1, ...body }), deps(upstream(calls)));
+    assert.equal(r.status, 200, JSON.stringify(body));
+    assert.deepEqual(calls.at(-1)?.body, { jsonrpc: '2.0', id: 1, ...body });
+  }
+  const before = calls.length;
+  for (const slot of [-1, 1.5, '412388000', null, true, Number.MAX_SAFE_INTEGER + 1, 1e300, { n: 1 }]) {
+    for (const params of [[[key], { encoding: 'base64', minContextSlot: slot }], [key, { encoding: 'base64', minContextSlot: slot }]]) {
+      const method = Array.isArray(params[0]) ? 'getMultipleAccounts' : 'getAccountInfo';
+      const r = await handleRpc(post({ jsonrpc: '2.0', id: 1, method, params }), deps(upstream(calls)));
+      assert.equal(r.status, 400, `${method} ${JSON.stringify(slot)}`);
+      assert.equal(((await r.json()) as { error: { message: string } }).error.message, 'unsupported minContextSlot');
+    }
+  }
+  assert.equal(calls.length, before, 'nothing refused reaches the upstream');
+});
+
+test("the upstream's minContextSlot error reaches the page as it is", async () => {
+  const key = Keypair.generate().publicKey.toBase58();
+  const error = { code: -32016, message: 'Minimum context slot has not been reached', data: { contextSlot: 412387000 } };
+  const r = await handleRpc(
+    post({ jsonrpc: '2.0', id: 3, method: 'getMultipleAccounts', params: [[key], { encoding: 'base64', minContextSlot: 412388000 }] }),
+    deps(upstream([], (call) => new Response(JSON.stringify({ jsonrpc: '2.0', id: call.body.id, error })))),
+  );
+  assert.equal(r.status, 200);
+  assert.deepEqual(((await r.json()) as { error: unknown }).error, error);
+});

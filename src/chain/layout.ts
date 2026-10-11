@@ -69,8 +69,13 @@ export interface SessionAccount {
   readonly wallet: string;
   /** The ephemeral key allowed to sign. */
   readonly sessionKey: string;
-  /** The slot at which it stops working (the program counts slots, not time). */
-  readonly expiresAtSlot: bigint;
+  /**
+   * When it stops working. On a binary with time-based expiry (lazorkit-protocol
+   * #57) this is Unix seconds, and the action buffer's windows are seconds too;
+   * builds before it stored a slot here. Which one a binary uses is a property
+   * of the binary (config/programs.json `time-expiry`), not of the account.
+   */
+  readonly expiresAt: bigint;
   /** The limits (an action buffer); empty when it has none. */
   readonly actions: Uint8Array;
 }
@@ -135,7 +140,7 @@ export function decodeSession(address: string, data: Uint8Array): SessionAccount
     address,
     wallet: key(data, 8),
     sessionKey: key(data, 40),
-    expiresAtSlot: view(data).getBigUint64(72, true),
+    expiresAt: view(data).getBigUint64(72, true),
     actions: data.slice(SESSION_HEADER),
   };
 }

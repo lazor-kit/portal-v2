@@ -192,7 +192,9 @@ function checkConfig(value: Json | undefined, allowed: readonly string[]): strin
   if (value === undefined) return null;
   if (!isObject(value) || !onlyKeys(value, allowed)) return 'unsupported config';
   if (value.commitment !== undefined && !COMMITMENTS.has(value.commitment as string)) return 'unsupported commitment';
-  if (value.minContextSlot !== undefined && (typeof value.minContextSlot !== 'number' || !Number.isSafeInteger(value.minContextSlot))) {
+  // A slot: a whole number from 0 to 2^53 - 1, forwarded as it is. The
+  // portal's typed reads depend on it to refuse answers from lagging nodes.
+  if (value.minContextSlot !== undefined && !isCount(value.minContextSlot, Number.MAX_SAFE_INTEGER)) {
     return 'unsupported minContextSlot';
   }
   if (value.dataSlice !== undefined) {

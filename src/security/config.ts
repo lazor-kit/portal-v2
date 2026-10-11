@@ -2,6 +2,7 @@
  * Checks for config/portal-policy.json and config/registry.json. A file that
  * does not pass is a build and test failure, never a silently looser portal.
  */
+import { addressBytes } from './address.ts';
 import type { Gate, PortalPolicy } from './policy.ts';
 import { isAlwaysDeniedScheme } from './redirect.ts';
 import type { RegisteredApp, Registry } from './registry.ts';
@@ -88,6 +89,7 @@ export function parseRegistry(json: unknown, file = 'registry.json'): Registry {
   if (!isObj(json) || json.version !== 1 || !Array.isArray(json.apps)) throw new ConfigError(file, 'version must be 1, with an apps list');
   const ids = new Set<string>();
   const origins = new Map<string, string>();
+  const payers = new Map<string, string>();
   const apps: RegisteredApp[] = json.apps.map((raw, i) => {
     if (!isObj(raw)) throw new ConfigError(file, `apps[${i}] must be an object`);
     const id = raw.id;
@@ -111,12 +113,22 @@ export function parseRegistry(json: unknown, file = 'registry.json'): Registry {
     if (raw.programChallenges !== undefined && typeof raw.programChallenges !== 'boolean') {
       throw new ConfigError(file, `${id}: programChallenges must be true or false`);
     }
+    const feePayers = raw.feePayers ?? [];
+    if (!Array.isArray(feePayers)) throw new ConfigError(file, `${id}: feePayers must be a list`);
+    for (const key of feePayers) {
+      if (typeof key !== 'string' || !addressBytes(key)) throw new ConfigError(file, `${id}: "${String(key)}" must be a base58 public key`);
+      // "Paid by" names one app: a key two apps use is a shared paymaster.
+      const owner = payers.get(key);
+      if (owner) throw new ConfigError(file, `${id}: fee payer ${key} is already registered to ${owner}`);
+      payers.set(key, id);
+    }
     return {
       id,
       name: raw.name.trim(),
       origins: appOrigins as string[],
       redirects: redirects as string[],
       ...(raw.programChallenges === undefined ? {} : { programChallenges: raw.programChallenges }),
+      ...(feePayers.length ? { feePayers: feePayers as string[] } : {}),
     };
   });
   return { version: 1, apps };

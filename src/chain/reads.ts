@@ -44,7 +44,7 @@ export interface VaultHoldings {
 
 export interface WalletAccounts {
   readonly wallet: string;
-  /** The oldest slot the answers were read at; compare session expiries with it. */
+  /** The oldest slot the answers were read at. */
   readonly slot: number;
   readonly authorities: readonly AuthorityAccount[];
   readonly sessions: readonly SessionAccount[];
@@ -170,7 +170,7 @@ export async function readWalletAccounts(transport: Transport, cluster: Cluster,
         wallet,
         slot: Math.min(authorities.slot, sessions.slot, deferred.slot),
         authorities: decodeAll(authorities.rows, decodeAuthority),
-        sessions: decodeAll(sessions.rows, decodeSession).sort((a, b) => (a.expiresAtSlot < b.expiresAtSlot ? -1 : a.expiresAtSlot > b.expiresAtSlot ? 1 : 0)),
+        sessions: decodeAll(sessions.rows, decodeSession).sort((a, b) => (a.expiresAt < b.expiresAt ? -1 : a.expiresAt > b.expiresAt ? 1 : 0)),
         deferred: decodeAll(deferred.rows, decodeDeferred),
         unreadable,
       },

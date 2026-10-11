@@ -40,8 +40,9 @@ function assertionFields(response: AuthenticatorAssertionResponse): AssertionFie
  * Sign `challenge` with the passkey `credentialId` names, and no other. The
  * challenge is the classified request bytes, never a URL parameter.
  */
-export async function signChallenge(challenge: Uint8Array, credentialId: Uint8Array): Promise<{ credentialId: string; assertion: AssertionFields }> {
+export async function signChallenge(challenge: Uint8Array, credentialId: Uint8Array, signal?: AbortSignal): Promise<{ credentialId: string; assertion: AssertionFields }> {
   const credential = (await navigator.credentials.get({
+    signal,
     publicKey: {
       challenge,
       allowCredentials: [{ type: 'public-key', id: credentialId }],
@@ -58,8 +59,9 @@ export async function signChallenge(challenge: Uint8Array, credentialId: Uint8Ar
  * challenge, the assertion over it is returned; without one, a random
  * challenge is used and only the credential is.
  */
-export async function signIn(proof: Uint8Array | null): Promise<{ credentialId: string; assertion?: AssertionFields }> {
+export async function signIn(proof: Uint8Array | null, signal?: AbortSignal): Promise<{ credentialId: string; assertion?: AssertionFields }> {
   const credential = (await navigator.credentials.get({
+    signal,
     publicKey: {
       challenge: proof ?? randomBytes(32),
       userVerification: 'required',
@@ -73,8 +75,9 @@ export async function signIn(proof: Uint8Array | null): Promise<{ credentialId: 
 }
 
 /** Register a new passkey named `name`; its public key comes from the registration itself. */
-export async function createPasskey(name: string): Promise<{ credentialId: string; publicKey: string }> {
+export async function createPasskey(name: string, signal?: AbortSignal): Promise<{ credentialId: string; publicKey: string }> {
   const credential = (await navigator.credentials.create({
+    signal,
     publicKey: {
       challenge: randomBytes(32),
       rp: { name: 'Lazor Kit Portal', id: window.location.hostname },
@@ -96,10 +99,16 @@ export async function createPasskey(name: string): Promise<{ credentialId: strin
   return { credentialId: toBase64(credential.rawId), publicKey: compressedPublicKey(spki) };
 }
 
+/** Whether a WebAuthn failure is the one browsers give for no passkey, a canceled prompt or a timeout alike. */
+export function isNotAllowed(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'NotAllowedError';
+}
+
 /** A WebAuthn failure in words a person can act on. */
 export function ceremonyErrorText(error: unknown): string {
   const name = error instanceof DOMException ? error.name : '';
-  if (name === 'NotAllowedError') return 'The passkey request was cancelled or timed out.';
+  if (name === 'NotAllowedError') return 'The passkey request was canceled or timed out.';
+  if (name === 'AbortError') return 'The passkey request was stopped.';
   if (name === 'InvalidStateError') return 'This passkey already exists on this device.';
   if (name === 'SecurityError') return 'Passkeys are not available on this page.';
   return error instanceof Error && error.message ? error.message : 'The passkey request failed.';

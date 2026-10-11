@@ -24,21 +24,93 @@ system browser and gets the result back through a redirect.
 Nothing in the URL is trusted as is: the challenge is classified, the
 requester comes from the browser, and a redirect destination is checked.
 
+A typed request (below) adds a URL fragment, `#/?lk1=<base64url(UTF-8 JSON)>`,
+to the same query. The fragment never reaches a server or a `Referer`.
+
 ### What is signed
 
 The portal signs only these challenge formats (`src/security/challenge.ts`):
 
 | Kind | Bytes | Shown as |
 |---|---|---|
-| Message | 58: `"LazorKit signed message v1"` ‖ SHA-256(tag ‖ UTF-8 text) | the text, only when it recomputes to the challenge; without text, a fingerprint and an explicit confirmation |
-| Ownership proof | 59: `"LazorKit ownership proof v1"` ‖ 32 random bytes | "Confirm it's you"; signed during sign-in on connect |
-| Transaction | 32, with a preview | the simulated preview, attributed to the requester |
-| Approval | 32, no preview | a fingerprint and an explicit confirmation |
+| Message | 58: `"LazorKit signed message v1"` ‖ SHA-256(tag ‖ UTF-8 text) | the text, only when it recomputes to the challenge, with "Matches what your passkey signs" in Details; without text, "Sign data" with a caution and the fingerprint in Details |
+| Ownership proof | 59: `"LazorKit ownership proof v1"` ‖ 32 random bytes | "One more step"; signed during sign-in on connect |
+| Transaction | 32, with a preview | the simulated preview, as the requesting app's claim ("Acme says"): "Send 0.25 SOL" and the recipient when it is one plain transfer (compute-budget and memo instructions aside), otherwise "Approve this action"; anything LazorKit doesn't read is a caution |
+| Approval | 32, no preview | "Approve a change LazorKit can't show", with Cancel as the recommended button: a caution from a registered site (a frame or a popup); a danger from any other requester, approved only after a confirmation step |
 
-Anything else is refused with a reason, and the app is told why. The passkey
-always signs the classified bytes, with the passkey `credentialId` names.
-Control, zero-width and bidirectional characters in a message are shown as
-their code points.
+Anything else is refused with a reason, and the app is told why; the person
+reads what happened in plain words, and that their passkey signed nothing.
+The passkey always signs the classified bytes (for a typed request, the
+challenge recomputed with the slot and counter picked at Approve), with the
+passkey `credentialId` names. Control, zero-width and bidirectional characters in a
+message are shown as labelled markers ("reversed text"), never applied, with
+a caution; their code points are listed in Details.
+
+### Typed requests
+
+A typed request says what the program instruction does, so the portal can
+show it and check that the passkey signs exactly that (`src/approval`,
+`src/typed`). Version 1 covers CreateSession, RevokeSession and
+RemoveAuthority:
+
+```jsonc
+{ "v": 1, "kind": "createSession",        // | "revokeSession" | "removeAuthority"
+  "cluster": "devnet", "programId": "57bT…", "wallet": "…", "authority": "…",
+  "credentialId": "<base64url>", "payer": "…", "counter": 7,
+  "preparedSlot": "412388000", "minContextSlot": 412387990,   // optional
+  "args": { "sessionKey": "…", "expiresAt": "<unix seconds>", "actions": "<base64url>" } }
+// revokeSession: args { session, refund }; removeAuthority: args { target, refund }
+```
+
+- The schema is strict: exact keys, base58 addresses, decimal u64 strings,
+  unpadded base64url, the actions buffer exactly as the program receives it
+  (decoded with the program's own rules). The JSON text must be the
+  encoder's own, byte for byte: keys in schema order, no whitespace, no
+  duplicate keys, integers written as integers. At most 8,192 characters in
+  the fragment and 16,384 in the URL.
+- The fragment is read once, before the router starts, then removed from the
+  address bar; a `hashchange` after that refuses the request.
+- On load, the envelope with its own `preparedSlot` and `counter` must
+  recompute to the `message` the SDK sent, `credentialId` must be the
+  query's, and `authority` must be that passkey's on the wallet. Then the
+  portal reads the chain (`src/typed/reads.ts`): the binary (its last-deploy
+  slot against `config/programs.json`), the wallet, the authority, the Clock,
+  the session or the authority to remove, the mints the limits name, and the
+  vault when a "could spend all" line needs it. What the program would refuse
+  is refused here.
+- Every one of these reads, and every snapshot below, is asked of a node at
+  or past the request's `preparedSlot` and `minContextSlot` and the newest
+  slot the page has seen (`minContextSlot` on the call), and carries the
+  Clock: an answer whose Clock is before that slot, or more than 32 slots
+  from the slot the answer claims, is from a node behind the RPC's load
+  balancer. Such answers, and "minimum context slot not reached", are read
+  again after 0.4, 0.8, 1.6, 3.2 and 3.2 seconds, then the request is
+  refused as `chain-unavailable` (Try again). `request-invalid` needs two
+  fresh answers in a row, the second asked at or past the first, so an
+  account the app has just created is never refused as missing because one
+  node had not seen it yet.
+- While the screen is open the portal reads the authority's counter and the
+  Clock once a second. Approve signs with that slot and the chain's counter
+  + 1 (never below the SDK's), picked inside the click: the program's
+  150-slot window starts when the person approves, not when the app
+  prepared. If no usable snapshot arrives for 10 seconds the request is
+  refused (`chain-unavailable`, with "Try again"; `request-invalid` when the
+  passkey was removed from the account meanwhile). The reply adds `typed: { v, kind, slot, counter, sysvarIxIndex }`
+  (`typedV`, `typedKind`, `typedSlot`, `typedCounter`, `typedSysvarIx` on
+  the redirect channel); the SDK recomputes the challenge from its own inputs
+  with them before it sends anything.
+- Screens: `session-create` ("Spending limit", the totals, "Fernway can spend
+  this to anyone, without asking you.", when it ends and where to stop it),
+  `session-no-total` (a caution block: "No total limit on SOL" and how much
+  could go; also when an asset's only total is a recurring limit that, over
+  the permission's life, could take all of it, or a window under an hour
+  when the balance can't be read), `session-no-limits` (a danger block, Cancel solid, a
+  confirmation), `session-stop`, `device-remove` and `key-remove`. Details
+  opens with "Matches what your passkey signs".
+- Refusals: `typed-malformed`, `typed-unsupported`, `challenge-mismatch`,
+  `wrong-network`, `request-invalid`, `stale-counter`, `chain-unavailable`
+  (with "Try again"). A request that carries a fragment never falls back to
+  the screen for a change LazorKit can't show.
 
 ### Who gets the answer
 
@@ -73,14 +145,65 @@ open it on a web host (`x-safari-https:`, `googlechromes:`, `firefox:`,
 the requesting origin or a registered destination: an unregistered
 destination is never navigated to for a refusal.
 
-Every screen shows the requester: the origin (in full), or the app
-destination a result returns to (scheme, host and path, never just the
-scheme), with a "Registered" or "Not registered" badge.
+Every screen shows who is asking, from the origin and the registry only: a
+registered origin (a frame or a popup, as the browser reports it) as its
+registered name, "Verified site" and the host; any other origin as its host,
+"Not verified". On the redirect channel any page can open the portal, so
+nothing there is a verified site: a registered web destination is shown as
+the app's name, "Returns to" its host and "Registered link"; an app
+destination as "An app on this phone" with where the result returns (scheme,
+host and path, never just the scheme). Hosts are never shortened, and the
+name registered under the public suffix (Public Suffix List, private domains
+included) is set in bold. Nested frames and the page that opened a redirect
+are listed in Details; on a transaction or a change LazorKit can't show, a
+redirect opened from a site other than its destination's is a caution.
+
+### The screens
+
+Each screen leads with one short line saying what is asked, then at most one
+caution or danger, one sentence and two facts; everything else is in Details,
+closed until opened. The buttons stay on screen: "Cancel" (a labelled button;
+Escape does the same, and closes only the address sheet while it is open) and the action ("Approve with passkey", "Sign with
+passkey", "Continue with passkey", "Create passkey"). Where Cancel is
+recommended (a likely failure, a change LazorKit can't show), it is the solid
+button on the right. One line under the buttons names the passkey the device
+will ask for ("Passkey for portal.lazor.sh"); on the first approval in a
+browser, and after a passkey step that didn't finish, it says the device may
+say "Sign in" and that this is the approval. While the device's prompt is
+open the screen says so, with Cancel; a prompt that doesn't finish leads to
+"Nothing was approved" and Try again. Once the answer has gone, a popup or a
+redirect shows "Back to <app>": the popup closes, or the redirect goes to the
+same destination with the same answer again. In a frame, the SDK closes the
+dialog.
+
+A transaction preview is shown as the app's claim until requests carry what
+is signed: "Acme says" over the summary, "Preview from Acme. LazorKit can't
+yet confirm it matches what you sign." in Details, and, from a requester
+that isn't verified, a caution that LazorKit can't confirm the amount. The
+amount leads only when the preview is one plain transfer, which the fee
+payer doesn't send, with compute-budget or memo instructions at most;
+anything else is "Approve this action", and from a verified site, an
+instruction LazorKit doesn't read is a caution ("Uses a service LazorKit
+can't read."). Details lists the instructions and their programs. A
+recipient is shown as an identicon and its first and last four characters;
+tapping it shows the whole address in groups of four, with Copy. The
+network is the preview's too: Details names it as the app's ("Solana Devnet
+(from Acme's preview)"), and a preview for a network other than the one the
+app asked for is a caution. The fee line says "Paid by <app>" only for a fee
+payer registered to that app (`feePayers`); a payment to the fee payer is
+shown as a fee the user pays.
+
+Colours: one accent (indigo) for the recommended button and the focus ring;
+risk tiers that differ in lightness and carry their own icon and words; light
+and dark follow the system. Text is at least 13px, and contrast is checked by
+`test/screens.test.ts`.
 
 ### Approving
 
 Approve and sign-in act only on a real click (`isTrusted`), and only 600 ms
-after they become available (`src/security/gesture.ts`). The delay starts
+after they become available (1.5 s after the box of a danger screen's
+confirmation step is ticked; `src/security/gesture.ts`). While a button arms,
+a thin bar fills inside it. The delay starts
 again whenever what is under the pointer may have changed: the button is
 enabled (a simulation finishes, a box is ticked), the page becomes visible
 again, a popup or top-level page gains focus, or the mouse enters the frame.
@@ -93,8 +216,9 @@ and buttons) is fully on screen and not covered, faded or transformed by the
 embedding page. A frame too small to show the request at its minimum height
 keeps the buttons off.
 
-Safari and Firefox do not report this. There, a transaction also needs an
-explicit confirmation (approvals and messages without text always do), and
+Safari and Firefox do not report this. There, a transaction and a change
+LazorKit can't show from a registered site also need an explicit
+confirmation (one from a requester that isn't registered always does), and
 telemetry records `visibility: "untracked"`. Until `framing.mode` is
 `enforce`, a site that is not registered can frame the portal on those
 browsers without the portal being able to tell that it is covered.
@@ -108,8 +232,8 @@ and counts the sender's origin as evidence.
 
 ## Configuration
 
-Both files are checked when the app is built and loaded
-(`src/security/config.ts`); a change is a commit and a deploy.
+The files are checked when the app is built and loaded
+(`src/security/config.ts`, `src/typed/programs.ts`); a change is a commit and a deploy.
 
 ### `config/portal-policy.json`
 
@@ -130,6 +254,30 @@ The `enforce` settings are `transaction` and `approval` at `registered`,
 both redirect rules at `deny`, `framing.mode` at `enforce`, and
 `contentPolicy` at `enforce`.
 
+### `config/programs.json`
+
+```json
+{ "devnet": { "programId": "57bTNWqtYTJbWuLWASKo6GqUTAK6oFDUR5c6hEc6V8nv", "lastDeploySlot": 509609649,
+              "features": ["wallet-bound-challenge", "d13", "nonowner-invariants", "time-expiry"] } }
+```
+
+The LazorKit program a typed request may name on each cluster, the slot its
+binary was last deployed at, and what that binary does
+(`wallet-bound-challenge`, `d13`, `nonowner-invariants`, `time-expiry`). A
+claim that depends on the binary is made only when the feature is listed and
+the chain's program data says the binary is that deploy. A cluster that is
+not listed refuses typed requests (`wrong-network`); so does CreateSession
+without `time-expiry`. On a listed binary without `time-expiry`, action
+expiries and recurring windows are read as slots; on a binary that isn't
+the listed deploy, no judgment that depends on an expiry is made.
+
+The deploy slot is known only once the program upgrade lands, so a program
+release goes: upgrade the program, read its ProgramData last-deploy slot,
+update this file and deploy the portal, and only then publish SDKs that
+send typed requests. Until the portal is redeployed, a typed CreateSession
+on that cluster is refused (`wrong-network`); RevokeSession and
+RemoveAuthority are not affected.
+
 ### `config/registry.json`
 
 ```json
@@ -141,7 +289,8 @@ both redirect rules at `deny`, `framing.mode` at `enforce`, and
       "name": "Acme",
       "origins": ["https://app.acme.xyz"],
       "redirects": ["acme://", "https://app.acme.xyz/callback"],
-      "programChallenges": true
+      "programChallenges": true,
+      "feePayers": ["GmaDrppBC7P5ARKV8g3djiwP89vz1jLK23V2GBjuAEGB"]
     }
   ]
 }
@@ -151,6 +300,9 @@ both redirect rules at `deny`, `framing.mode` at `enforce`, and
 - `redirects`: a scheme (`acme://`) or a URL prefix; `/callback` covers
   `/callback/done` but not `/callbackx`.
 - `programChallenges: false` refuses 32-byte challenges from that app.
+- `feePayers`: fee payer keys (base58) the app alone uses; a transaction paid
+  by one shows "Fee: Paid by Acme". A key may belong to one app only; never
+  list a shared paymaster.
 - Other fields (contact, dates, notes) are ignored by the code.
 
 ### Headers
@@ -172,7 +324,9 @@ It sets `Content-Security-Policy` (enforced) and
   styles from the portal's origin, data from the portal's origin and
   `https://api.coingecko.com` (the SOL price for the fee), images from the
   portal's origin and `data:`, and no plugins, `<base>` or form submissions.
-  The page loads nothing from another origin (system fonts only).
+  The page loads nothing from another origin: its fonts (Atkinson
+  Hyperlegible Next and Mono) are bundled and served from the portal's own
+  origin.
 
 Reports go to `/api/csp-report`. It never sets `X-Frame-Options` or
 `Cross-Origin-Opener-Policy: same-origin`; apps that open the portal in a
@@ -198,16 +352,18 @@ methods are forwarded, each with its parameters checked
 
 | Method | Accepted |
 |---|---|
-| `getMultipleAccounts` | 1 to 100 addresses, `base64` |
+| `getMultipleAccounts` | 1 to 100 addresses, `base64`, optional `dataSlice` and `minContextSlot` |
 | `simulateTransaction` | a base64 transaction of at most 2048 characters, `sigVerify` off, at most 128 accounts returned |
 | `getLatestBlockhash`, `isBlockhashValid` | commitment and `minContextSlot` only |
-| `getAccountInfo` | one address, `base64`, optional `dataSlice` |
+| `getAccountInfo` | one address, `base64`, optional `dataSlice` and `minContextSlot` |
 | `getBalance` | one address |
 | `getTokenAccountsByOwner` | one owner, by mint or by program (SPL Token or Token-2022 only), `base64` or `jsonParsed` |
 | `getProgramAccounts` | the LazorKit v2 program of the request's cluster only, `base64`, with exactly two filters: one account type (Authority, Session or DeferredExec) and one wallet at that type's wallet offset |
 | `getSignaturesForAddress` | one address, the newest 1 to 1000 signatures (no `before` or `until`), `confirmed` or `finalized` |
 | `getTransaction` | one signature, `json`, `jsonParsed` or `base64`, transaction version 0 or 1, `confirmed` or `finalized` |
 
+- **`minContextSlot`**, wherever a method takes it, must be a whole number
+  from 0 to 2^53 - 1, and is forwarded unchanged.
 - **Budget.** Each client address (an IPv6 client by its /64) has a budget
   of request cost: 300, refilled at 5 a second. A program listing costs 10,
   a signature list 5, a simulation or token listing 2, anything else 1.
@@ -247,7 +403,7 @@ fills in a value it could not read.
 | Read | What it returns |
 |---|---|
 | `readVault` | the vault's SOL, and its SPL Token and Token-2022 accounts with any delegate and delegated amount |
-| `readWalletAccounts` | the wallet's authorities (role, key, policy bytes), sessions (key, expiry slot, limit bytes) and deferred executions; accounts of a newer layout are counted, not decoded |
+| `readWalletAccounts` | the wallet's authorities (role, key, policy bytes), sessions (key, expiry: Unix seconds on a time-expiry binary, a slot before it; limit bytes) and deferred executions; accounts of a newer layout are counted, not decoded |
 | `readPaymentHistory` | payments out of the vault: successful, non-zero SOL transfers from it and token transfers it signed out of its token accounts, by the address paid (for tokens, the owner of the receiving account). Incoming transfers, failed transactions, zero-value transfers and transfers it did not sign never count; their other parties are listed apart as `counterparties`. It lists the newest 1000 signatures and reads at most 100 successful transactions, and says how many of the newest it read without a gap (`scanned`) and whether that was all of them (`coverage`) |
 | `paymentsTo` | from a history: the payments to one address, newest first |
 | `checkRecipient` | from a history: the relation (`paid` with a count and the last time, `first-time`, `not-in-recent` with how many were read, `own-account`, or `unknown`), and the closest lookalike among addresses paid, the user's own and saved ones, then counterparties (`none` only when the whole history was read; `none-in-recent` otherwise) |
@@ -293,15 +449,17 @@ How released SDKs fare against this portal under the committed policy
 
 | SDK | Connect | Transactions | Wallet changes (32 bytes, no preview) | `signMessage` |
 |---|---|---|---|---|
-| web 2.0.1, 2.1.0 † | signs in; the key is reported when this portal stored it for the credential, else the SDK reads it from the chain (2.0.1 opens connect in a popup on every browser) | shown with the preview | approval screen with confirmation | refused (raw text or bytes are not a recognised format) |
-| web 3.0.0 to 3.3.0 († 3.3.0) | as above; the 32-byte connect challenge is not signed, and with the key stored there is no second prompt | shown | approval screen | refused |
-| web 3.3.1 and later | the ownership proof is signed at sign-in | shown | approval screen | shown as text |
-| mobile 1.5.x | signs in through the redirect; a key not reported is read from the chain | shown | approval screen | refused |
-| mobile 2.0.0 to 2.3.0 | signs in through the redirect | shown | approval screen | refused |
-| mobile 2.3.1 and later | signs in through the redirect | shown | approval screen | shown as text |
+| web 2.0.1, 2.1.0 † | signs in; the key is reported when this portal stored it for the credential, else the SDK reads it from the chain (2.0.1 opens connect in a popup on every browser) | shown with the preview | "a change LazorKit can't show" | refused (raw text or bytes are not a recognised format) |
+| web 3.0.0 to 3.3.0 († 3.3.0) | as above; the 32-byte connect challenge is not signed, and with the key stored there is no second prompt | shown | "a change LazorKit can't show" | refused |
+| web 3.3.1 and later | the ownership proof is signed at sign-in | shown | "a change LazorKit can't show" | shown as text |
+| mobile 1.5.x | signs in through the redirect; a key not reported is read from the chain | shown | "a change LazorKit can't show" | refused |
+| mobile 2.0.0 to 2.3.0 | signs in through the redirect | shown | "a change LazorKit can't show" | refused |
+| mobile 2.3.1 and later | signs in through the redirect | shown | "a change LazorKit can't show" | shown as text |
 
 On the redirect channel (mobile), an app scheme that is not registered is
-shown as "Not registered" in transition and refused at `enforce`. Under
+shown as "An app on this phone" in transition and refused at `enforce`; a
+registered app scheme is shown the same way, since a scheme doesn't identify
+one app. Under
 `enforce`, transactions and wallet changes are for registered apps only.
 
 ## Development
@@ -328,7 +486,9 @@ pnpm build
 the portal (the committed policy, and the enforce settings), in Chromium with a
 virtual authenticator, and a fake RPC. It covers connect, messages, a
 transaction, approvals, refusals, covered and short frames, popups, redirects,
-headers, the content policy and telemetry.
+headers, the content policy and telemetry, and the screens' own behaviour
+(the caution and danger steps, Escape, a passkey step that doesn't finish,
+the address sheet, the way back after a redirect).
 
 ```bash
 # a built @lazorkit/wallet (lazor-kit packages/react after `pnpm build`)
@@ -338,3 +498,19 @@ pnpm e2e
 ```
 
 Results go to `e2e/.out/results.json`, screenshots to `e2e/.out/screens/`.
+
+`e2e/typed.mjs` runs typed requests end to end on a local validator: a wallet
+whose passkey the virtual authenticator holds, requests prepared with
+`@lazorkit/sdk-legacy` and opened as the SDK opens them, the screen read,
+Approve pressed (once after waiting more than 150 slots), and the transaction
+finalized with the portal's slot and counter and sent. It also covers a
+counter that moves before Approve, the caution and danger screens, a forged
+envelope, a changed fragment and an unconfigured network. The validator runs
+on its own ports and ledger, and is stopped and deleted at the end.
+
+```bash
+LAZORKIT_SO=<lazorkit-protocol devnet build>/lazorkit_program.so \
+LAZORKIT_INIT_AUTHORITY=<lazorkit-protocol>/keys/devnet-init-authority.json \
+TYPED_LEDGER=<an empty directory> PLAYWRIGHT_MODULE=/path/to/node_modules/playwright \
+pnpm e2e:typed
+```

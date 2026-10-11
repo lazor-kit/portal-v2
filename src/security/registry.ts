@@ -19,6 +19,12 @@ export interface RegisteredApp {
   readonly redirects?: readonly string[];
   /** Whether the app may ask for 32-byte program challenges (until preimage support). Default true. */
   readonly programChallenges?: boolean;
+  /**
+   * Fee payer keys (base58) used by this app alone. A transaction whose fee
+   * payer is one of them is shown as "Fee: Paid by <name>"; a shared
+   * paymaster serves many apps and is never listed here.
+   */
+  readonly feePayers?: readonly string[];
 }
 
 export interface Registry {
@@ -54,6 +60,11 @@ export function redirectMatches(prefix: string, url: URL): boolean {
   if (target === root) return true;
   const withSlash = root.endsWith('/') ? root : `${root}/`;
   return target.startsWith(withSlash);
+}
+
+/** Whether `feePayer` is a fee payer key registered to `app` (and so to no other app). */
+export function paysFees(app: RegisteredApp | undefined, feePayer: string | null): boolean {
+  return !!app && feePayer !== null && (app.feePayers ?? []).includes(feePayer);
 }
 
 export function appForRedirect(registry: Registry, url: URL): RegisteredApp | undefined {

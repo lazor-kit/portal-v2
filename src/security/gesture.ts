@@ -18,6 +18,8 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 
 export const ARM_DELAY_MS = 600;
+/** The delay after the box of a danger screen's confirmation step is ticked. */
+export const ACK_ARM_DELAY_MS = 1500;
 /** Share of the surface that must be on screen; 1 allows for sub-pixel rounding. */
 export const FULLY_VISIBLE = 0.99;
 
@@ -66,9 +68,11 @@ export interface ActivationGuard {
 /**
  * The guard for a button that approves: `active` is false while the button
  * is disabled for another reason (busy, an unticked box, a preview still
- * loading); turning true starts the delay.
+ * loading); turning true starts the delay. `delayMs` may only lengthen the
+ * delay.
  */
-export function useActivationGuard({ framed, active }: { framed: boolean; active: boolean }): ActivationGuard {
+export function useActivationGuard({ framed, active, delayMs = ARM_DELAY_MS }: { framed: boolean; active: boolean; delayMs?: number }): ActivationGuard {
+  const delay = Math.max(ARM_DELAY_MS, delayMs);
   const surface = useContext(DecisionSurface);
   const track = framed && supportsVisibilityTracking();
   const [visible, setVisible] = useState(!track);
@@ -81,9 +85,9 @@ export function useActivationGuard({ framed, active }: { framed: boolean; active
   const [armed, setArmed] = useState(false);
 
   const rearm = useCallback(() => {
-    readyAt.current = performance.now() + ARM_DELAY_MS;
+    readyAt.current = performance.now() + delay;
     setEpoch((n) => n + 1);
-  }, []);
+  }, [delay]);
   const disarm = useCallback(() => {
     readyAt.current = Number.POSITIVE_INFINITY;
     setEpoch((n) => n + 1);

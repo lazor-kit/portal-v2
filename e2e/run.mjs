@@ -18,9 +18,9 @@ import { createHash, createPrivateKey, createPublicKey, randomBytes, verify } fr
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { Keypair, SystemProgram, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
+import { Keypair, PublicKey, SystemProgram, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { inlineScriptHashes } from '../scripts/gen-headers.mjs';
-import { buildAll, DAPP, OUT, PORTAL_E, PORTAL_T } from './build.mjs';
+import { buildAll, DAPP, DAPP_FEE_PAYER, OUT, PORTAL_E, PORTAL_T } from './build.mjs';
 import { startDapp, startPortal, startRpc } from './serve.mjs';
 
 const require = createRequire(import.meta.url);
@@ -192,12 +192,12 @@ const messageChallenge = (bytes) => {
   return Buffer.concat([tag, sha256(Buffer.concat([tag, bytes]))]);
 };
 
-function previewTransaction() {
-  const payer = Keypair.generate().publicKey;
+/** A preview sending 0.001 SOL to `to` (random unless given), paid for by `payer` (random unless given). */
+function previewTransaction({ to = Keypair.generate().publicKey, payer = Keypair.generate().publicKey } = {}) {
   const message = new TransactionMessage({
     payerKey: payer,
     recentBlockhash: Keypair.generate().publicKey.toBase58(),
-    instructions: [SystemProgram.transfer({ fromPubkey: payer, toPubkey: Keypair.generate().publicKey, lamports: 1_000_000 })],
+    instructions: [SystemProgram.transfer({ fromPubkey: Keypair.generate().publicKey, toPubkey: to, lamports: 1_000_000 })],
   }).compileToV0Message();
   return Buffer.from(new VersionedTransaction(message).serialize()).toString('base64');
 }
@@ -214,9 +214,18 @@ await scenario('connect: create a passkey (proof requested), reply kind created 
   const pending = A.page.evaluate((c) => window.lk.connect(c), b64url(proof));
   const frame = await portalFrame(A.page);
   check((await frame.textContent('[data-testid=requester-origin]')) === DAPP, 'requester shown is the dApp origin');
-  check((await frame.textContent('[data-testid=requester-badge]')).includes('Registered: E2E dApp'), 'registered badge');
-  await frame.fill('[data-testid=account-name]', 'E2E Alice');
+  check((await frame.getAttribute('[data-testid=requester]', 'data-origin')) === DAPP, 'the full origin on the header');
+  check((await frame.textContent('[data-testid=requester-name]')) === 'E2E dApp', 'registered name');
+  check((await frame.textContent('[data-testid=requester-badge]')).includes('Verified site'), 'verified badge');
+  check((await frame.textContent('[data-testid=hero]')) === 'Sign in to E2E dApp', 'sign-in hero');
+  check((await frame.textContent('[data-testid=caption]')).includes('Passkey for localhost:4173'), 'the passkey caption names the portal');
   await shot(A.page, 'connect');
+  await frame.click('[data-testid=to-create]');
+  check((await frame.textContent('[data-testid=hero]')) === 'Create your passkey', 'create view');
+  check((await frame.inputValue('[data-testid=account-name]')).startsWith('LazorKit · '), 'a default passkey name');
+  await frame.click('[data-testid=details-toggle]');
+  await frame.fill('[data-testid=account-name]', 'E2E Alice');
+  await shot(A.page, 'connect-create');
   await press(frame, '[data-testid=create]');
   const result = await pending;
   check(result.ok, JSON.stringify(result));
@@ -265,6 +274,8 @@ await scenario('signMessage (UTF-8): text shown as sent; the SDK accepts the sig
   const frame = await portalFrame(A.page);
   const shown = await frame.textContent('[data-testid=message-text]');
   check(shown === text, `shown text ${JSON.stringify(shown)}`);
+  check(await frame.$('[data-testid=caption-explainer]'), 'the first approval on this browser explains the "Sign in" prompt');
+  check(await frame.$('[data-testid=match-line]'), 'Details opens with the compare line');
   // A script's click is not a user's.
   await frame.waitForSelector('[data-testid=approve][data-guard=ready]');
   await frame.evaluate(() => document.querySelector('[data-testid=approve]').click());
@@ -278,43 +289,75 @@ await scenario('signMessage (UTF-8): text shown as sent; the SDK accepts the sig
   return { signedPayload: !!result.value.signedPayload };
 });
 
-await scenario('signMessage (not UTF-8): fingerprint, explicit confirmation, then signed', async () => {
+await scenario('signMessage (not UTF-8): a caution and the fingerprint in Details, then signed', async () => {
   const bytes = [0xff, 0xfe, 0x00, 0x80, ...randomBytes(12)];
   const pending = A.page.evaluate(([b, c]) => window.lk.signMessage(b, c), [bytes, credentialId]);
   const frame = await portalFrame(A.page);
   check((await frame.getAttribute('[data-testid=message-review]', 'data-kind')) === 'message-without-text', 'shown without text');
   const fingerprint = (await frame.textContent('[data-testid=fingerprint]')).replace(/\s/g, '');
   check(fingerprint === messageChallenge(Buffer.from(bytes)).subarray(26).toString('hex'), 'fingerprint is the message hash');
-  await sleep(800);
-  check(await frame.isDisabled('[data-testid=approve]'), 'Sign disabled until confirmed');
-  await frame.check('[data-testid=confirm]');
+  check((await frame.textContent('[data-testid=caution]')).includes("can't be shown as text"), 'a caution, not a tick box');
+  check(!(await frame.$('[data-testid=confirm]')), 'no tick box');
+  check(await frame.$('[data-testid=caption]') && !(await frame.$('[data-testid=caption-explainer]')), 'the short passkey caption after the first approval');
   await press(frame, '[data-testid=approve]');
   const result = await pending;
   check(result.ok, JSON.stringify(result));
   await verifyAssertion(A, { credentialId, signature: result.value.signature, clientDataJson: result.value.clientDataJsonBase64, authenticatorData: result.value.authenticatorDataBase64 }, messageChallenge(Buffer.from(bytes)));
 });
 
-await scenario('signMessage with direction overrides: shown as code points; Cancel rejects', async () => {
+await scenario('signMessage with direction overrides: shown as labelled markers, with a caution; Cancel rejects', async () => {
   const pending = A.page.evaluate(([t, c]) => window.lk.signMessage(t, c), ['pay ‮evil‬ to bob', credentialId]);
   const frame = await portalFrame(A.page);
   const shown = await frame.textContent('[data-testid=message-text]');
-  check(shown.includes('U+202E') && !shown.includes('‮'), 'override shown as a code point');
+  check(!shown.includes('‮') && !shown.includes('‬'), 'no direction character is applied');
+  const markers = await frame.$$eval('[data-testid=hidden-char]', (els) => els.map((el) => [el.getAttribute('data-code'), el.textContent]));
+  check(JSON.stringify(markers.map((m) => m[0])) === JSON.stringify(['U+202E', 'U+202C']) && markers[0][1].includes('reversed text'), JSON.stringify(markers));
+  check((await frame.textContent('[data-testid=caution]')).includes('Hidden characters change how this reads.'), 'caution');
+  check((await frame.textContent('[data-testid=details]')).includes('U+202E (right-to-left override) at position 5'), 'code points in Details');
   await shot(A.page, 'sign-message-bidi');
   await frame.click('[data-testid=cancel]');
   const result = await pending;
   check(!result.ok && /User rejected/.test(result.message), JSON.stringify(result));
 });
 
-await scenario('transaction: preview simulated through /api/rpc on the network its blockhash names', async () => {
+await scenario('transaction: preview simulated through /api/rpc on the network its blockhash names; shown as the app\'s claim', async () => {
   const challenge = randomBytes(32);
+  const to = Keypair.generate().publicKey.toBase58();
   rpcCalls.length = 0;
-  const pending = A.page.evaluate(([ch, tx, c]) => window.lk.sign(ch, tx, c, 'mainnet'), [b64url(challenge), previewTransaction(), credentialId]);
+  const pending = A.page.evaluate(([ch, tx, c]) => window.lk.sign(ch, tx, c, 'mainnet'), [b64url(challenge), previewTransaction({ to: new PublicKey(to), payer: new PublicKey(DAPP_FEE_PAYER) }), credentialId]);
   const frame = await portalFrame(A.page);
-  check((await frame.textContent('[data-testid=preview-source]')).includes(DAPP), 'preview attributed to the dApp');
-  await frame.waitForSelector('[data-testid=network][data-cluster]');
+  check((await frame.textContent('[data-testid=preview-source]')).includes('E2E dApp says'), 'preview attributed to the dApp');
+  await frame.waitForSelector('[data-testid=transaction-review][data-loading=false]');
   const cluster = await frame.getAttribute('[data-testid=network]', 'data-cluster');
   check(cluster === 'devnet', `simulated on ${cluster}: the blockhash is valid on devnet only`);
   check((await frame.textContent('[data-testid=transaction-review]')).includes('The app asked for mainnet'), 'mismatch noted');
+  check((await frame.textContent('[data-testid=caution]')).includes('This preview is for a test network, but E2E dApp asked for real money.'), 'the mismatch is a caution on the first view');
+  check((await frame.textContent('[data-testid=network]')).includes("Solana Devnet (from E2E dApp's preview)"), "the network is named as the app's, in Details");
+  check((await frame.textContent('[data-testid=hero]')) === 'Send 0.001 SOL', 'hero from the preview');
+  check((await frame.getAttribute('[data-testid=recipient]', 'data-address')) === to, 'recipient chip holds the whole address');
+  check(!(await frame.textContent('[data-testid=transaction-review]')).includes('Not real money'), "no test-mode claim in LazorKit's voice");
+  check(!(await frame.$('[data-testid=match-line]')), 'no compare line on an app preview');
+  check((await frame.textContent('[data-testid=preview-notice]')).includes("Preview from E2E dApp. LazorKit can't yet confirm it matches what you sign."), 'Details says whose preview it is');
+  check((await frame.textContent('[data-testid=fee]')) .includes('Paid by E2E dApp'), 'a fee payer registered to the app');
+  // The whole address, with Copy; Escape closes the sheet, not the request.
+  await frame.click('[data-testid=recipient]');
+  const full = (await frame.textContent('[data-testid=full-address] [aria-hidden=true]')).replace(/\s/g, '');
+  check(full === to, `full address ${full}`);
+  await frame.click('[data-testid=copy-address]');
+  await frame.waitForSelector('[data-testid=copy-status]:has-text("Address copied")', { timeout: 3000 });
+  await shot(A.page, 'address-sheet');
+  await frame.press('[data-testid=address-done]', 'Escape');
+  await frame.waitForSelector('[data-testid=address-sheet]', { state: 'detached' });
+  check(await frame.$('[data-testid=transaction-review]'), 'still on the request');
+  // A click inside the sheet keeps focus there; with focus nowhere, Escape still closes the sheet only.
+  await frame.click('[data-testid=recipient]');
+  await frame.click('[data-testid=full-address]');
+  check(await frame.evaluate(() => !!document.activeElement?.closest('[data-testid=address-sheet]')), 'focus stays in the sheet after a click inside it');
+  await frame.evaluate(() => document.activeElement?.blur());
+  await A.page.keyboard.press('Escape');
+  await frame.waitForSelector('[data-testid=address-sheet]', { state: 'detached' });
+  await sleep(300);
+  check(await frame.$('[data-testid=transaction-review]'), 'still on the request after Escape with focus outside the sheet');
   await shot(A.page, 'transaction');
   await press(frame, '[data-testid=approve]');
   const result = await pending;
@@ -325,18 +368,85 @@ await scenario('transaction: preview simulated through /api/rpc on the network i
   return { rpc: methods };
 });
 
-await scenario('approval (32 bytes, no preview): fingerprint and confirmation; registered app in transition', async () => {
+await scenario('approval (32 bytes, no preview) from a verified site: a caution, Cancel recommended, no tick box', async () => {
   const challenge = randomBytes(32);
   const pending = A.page.evaluate(([ch, c]) => window.lk.sign(ch, '', c), [b64url(challenge), credentialId]);
   const frame = await portalFrame(A.page);
   check((await frame.getAttribute('[data-testid=approval-review]', 'data-kind')) === 'approval', 'approval screen');
+  check((await frame.getAttribute('[data-testid=approval-review]', 'data-tier')) === 'caution', 'caution');
   check((await frame.textContent('[data-testid=fingerprint]')).replace(/\s/g, '') === challenge.toString('hex'), 'fingerprint');
-  await sleep(800);
-  check(await frame.isDisabled('[data-testid=approve]'), 'Approve off until confirmed');
-  await frame.check('[data-testid=confirm]');
+  check(!(await frame.$('[data-testid=confirm]')), 'no tick box');
+  check((await frame.textContent('[data-testid=approve]')).includes('Approve anyway'), 'approve is the plain button');
+  const [approveX, cancelX] = await Promise.all(['approve', 'cancel'].map((id) => frame.$eval(`[data-testid=${id}]`, (el) => el.getBoundingClientRect().x)));
+  check(cancelX > approveX, 'Cancel, the recommended button, on the right');
+  await shot(A.page, 'legacy-change');
   await press(frame, '[data-testid=approve]');
   const result = await pending;
   check(result.ok, JSON.stringify(result));
+});
+
+await scenario('approval (32 bytes, no preview) from a site that is not verified: danger, then a confirmation step with a box; Cancel stays recommended', async () => {
+  const X = await newPage({ url: `${DAPP_B}/` });
+  try {
+    const { credentials } = await A.cdp.send('WebAuthn.getCredentials', { authenticatorId: A.authenticatorId });
+    await X.cdp.send('WebAuthn.addCredential', { authenticatorId: X.authenticatorId, credential: credentials[0] });
+    const challenge = randomBytes(32);
+    const pending = X.page.evaluate(([ch, c]) => window.lk.sign(ch, '', c), [b64url(challenge), credentialId]);
+    const frame = await portalFrame(X.page);
+    check((await frame.getAttribute('[data-testid=approval-review]', 'data-tier')) === 'danger', 'danger');
+    check((await frame.textContent('[data-testid=danger]')).includes('up to full control of your account'), 'danger block');
+    check(!(await frame.$('[data-testid=approve]')), 'nothing to approve before the confirmation step');
+    await shot(X.page, 'legacy-change-danger');
+    await frame.click('[data-testid=approve-anyway]');
+    await frame.waitForSelector('[data-testid=ack-step]');
+    await sleep(800);
+    check(await frame.isDisabled('[data-testid=approve]'), 'Approve off until the box is ticked');
+    await frame.check('[data-testid=confirm]');
+    await frame.hover('[data-testid=approve]', { force: true });
+    await sleep(900);
+    check((await frame.getAttribute('[data-testid=approve]', 'data-guard')) === 'arming', 'still arming 0.9 s after the tick (1.5 s here)');
+    const [approveX, cancelX] = await Promise.all(['approve', 'cancel'].map((id) => frame.$eval(`[data-testid=${id}]`, (el) => el.getBoundingClientRect().x)));
+    check(cancelX > approveX, 'Cancel stays the recommended button');
+    await shot(X.page, 'legacy-change-ack');
+    await press(frame, '[data-testid=approve]');
+    const result = await pending;
+    check(result.ok, JSON.stringify(result));
+    await verifyAssertion(X, { credentialId, signature: result.value.signature, clientDataJson: result.value.clientDataJsonBase64, authenticatorData: result.value.authenticatorDataBase64 }, challenge);
+  } finally {
+    await X.context.close();
+  }
+});
+
+await scenario('Escape is Cancel: the app gets a rejection', async () => {
+  const pending = A.page.evaluate(([t, c]) => window.lk.signMessage(t, c), ['escape test', credentialId]);
+  const frame = await portalFrame(A.page);
+  await frame.click('[data-testid=hero]');
+  await A.page.keyboard.press('Escape');
+  const result = await pending;
+  check(!result.ok && /User rejected/.test(result.message), JSON.stringify(result));
+});
+
+await scenario('a passkey step that does not finish: nothing was approved; Try again shows the longer note, then signs', async () => {
+  await A.cdp.send('WebAuthn.setUserVerified', { authenticatorId: A.authenticatorId, isUserVerified: false });
+  try {
+    const text = 'retry test';
+    const pending = A.page.evaluate(([t, c]) => window.lk.signMessage(t, c), [text, credentialId]);
+    const frame = await portalFrame(A.page);
+    check(await frame.$('[data-testid=caption]'), 'the short caption before');
+    await press(frame, '[data-testid=approve]');
+    await frame.waitForSelector('[data-testid=cancelled]', { timeout: 15_000 });
+    check((await frame.textContent('[data-testid=cancelled]')).includes("The passkey step didn't finish, so nothing was signed."), 'nothing was signed');
+    await shot(A.page, 'cancelled');
+    await A.cdp.send('WebAuthn.setUserVerified', { authenticatorId: A.authenticatorId, isUserVerified: true });
+    await frame.click('[data-testid=try-again]');
+    await frame.waitForSelector('[data-testid=caption-explainer]');
+    await press(frame, '[data-testid=approve]');
+    const result = await pending;
+    check(result.ok, JSON.stringify(result));
+    await verifyAssertion(A, { credentialId, signature: result.value.signature, clientDataJson: result.value.clientDataJsonBase64, authenticatorData: result.value.authenticatorDataBase64 }, messageChallenge(Buffer.from(text)));
+  } finally {
+    await A.cdp.send('WebAuthn.setUserVerified', { authenticatorId: A.authenticatorId, isUserVerified: true });
+  }
 });
 
 await scenario('gesture: an overlay on top of the dialog disables Approve until it is gone', async () => {
@@ -419,7 +529,8 @@ await scenario('layout: in a short window the request scrolls inside the frame; 
     const challenge = randomBytes(32);
     const pending = S.page.evaluate(([ch, tx, c]) => window.lk.sign(ch, tx, c, 'devnet'), [b64url(challenge), previewTransaction(), credentialId]);
     const frame = await portalFrame(S.page);
-    await frame.waitForSelector('[data-testid=network][data-cluster]');
+    await frame.waitForSelector('[data-testid=transaction-review][data-loading=false]');
+    await frame.click('[data-testid=details-toggle]');
     const [scrollable, frameHeight] = await frame.$eval('[data-testid=review-content]', (el) => [el.scrollHeight > el.clientHeight + 4, window.innerHeight]);
     check(scrollable, `the request scrolls inside a ${frameHeight}px frame`);
     const inView = (selector) => frame.$eval(selector, (el) => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight; });
@@ -453,7 +564,7 @@ await scenario('layout: a frame too small for the request keeps Approve off when
   check(reply.data?.type === 'error', JSON.stringify(reply));
 });
 
-await scenario('gesture: without visibility tracking (Safari, Firefox) a transaction needs an explicit confirmation; telemetry says so', async () => {
+await scenario('gesture: without visibility tracking (Safari, Firefox) a transaction and a change LazorKit can\'t show need an explicit confirmation; telemetry says so', async () => {
   const U = await newPage({
     url: `${DAPP}/`,
     // The portal frame on a browser without IntersectionObserver v2.
@@ -475,6 +586,18 @@ await scenario('gesture: without visibility tracking (Safari, Firefox) a transac
     await press(frame, '[data-testid=approve]');
     const result = await pending;
     check(result.ok, JSON.stringify(result));
+    // The change LazorKit can't show, from the verified site: the same tick box.
+    await idle(U.page);
+    const approval = U.page.evaluate(([ch, c]) => window.lk.sign(ch, '', c), [b64url(randomBytes(32)), credentialId]);
+    const legacy = await portalFrame(U.page);
+    check((await legacy.getAttribute('[data-testid=approval-review]', 'data-tier')) === 'caution', 'caution tier');
+    await legacy.waitForSelector('[data-testid=confirm]');
+    await sleep(800);
+    check(await legacy.isDisabled('[data-testid=approve]'), 'Approve anyway off until confirmed');
+    await legacy.check('[data-testid=confirm]');
+    await press(legacy, '[data-testid=approve]');
+    const approved = await approval;
+    check(approved.ok, JSON.stringify(approved));
     await sleep(500);
     const events = logs.slice(before).filter((l) => l.route === 'telemetry');
     check(events.length > 0 && events.every((e) => e.visibility === 'untracked'), JSON.stringify(events.map((e) => e.visibility)));
@@ -534,7 +657,8 @@ await scenario('enforce: an approval from an unregistered origin is refused, and
   const frame = await portalFrame(B.page, PORTAL_E);
   await frame.waitForSelector('[data-testid=refusal][data-reason=requires-registered-app]');
   check((await frame.textContent('[data-testid=requester-origin]')) === DAPP_B, 'requester shown');
-  check((await frame.textContent('[data-testid=requester-badge]')).includes('Not registered'), 'not registered badge');
+  check((await frame.textContent('[data-testid=requester-badge]')).includes('Not verified'), 'not verified badge');
+  check((await frame.textContent('[data-testid=refusal-sentence]')).includes('Your passkey signed nothing.'), 'says nothing was signed');
   await shot(B.page, 'enforce-unregistered');
   await frame.click('[data-testid=close]');
   const result = await pending;
@@ -612,6 +736,8 @@ await scenario('popup (Safari): connect creates a passkey and replies to the ope
     await popup.waitForSelector('[data-testid=requester]');
     check((await popup.getAttribute('[data-testid=requester]', 'data-channel')) === 'popup', 'popup channel');
     check((await popup.textContent('[data-testid=requester-origin]')) === DAPP, 'requester from the referrer');
+    await popup.click('[data-testid=to-create]');
+    await popup.click('[data-testid=details-toggle]');
     await popup.fill('[data-testid=account-name]', 'Popup');
     await press(popup, '[data-testid=create]');
     const result = await pending;
@@ -656,7 +782,10 @@ await scenario('redirect: signs and returns to the registered https callback wit
   const text = 'mobile sign';
   const T = await topLevel(`action=sign&message=${b64url(messageChallenge(Buffer.from(text)))}&displayMessage=${encodeURIComponent(text)}&credentialId=${cred()}&redirect_url=${encodeURIComponent(`${DAPP}/callback?state=xyz`)}`);
   try {
-    check((await T.page.textContent('[data-testid=requester-badge]')).includes('Registered'), 'registered destination');
+    // Any page can open the portal with this destination: where the answer returns, never "Verified site".
+    check((await T.page.textContent('[data-testid=requester-badge]')).includes('Registered link'), 'registered destination');
+    check((await T.page.getAttribute('[data-testid=requester-badge]', 'data-verified')) === 'false', 'not verified');
+    check((await T.page.textContent('[data-testid=requester]')).includes('Returns to http://localhost:5174'), 'returns to the destination');
     await press(T.page, '[data-testid=approve]');
     await T.page.waitForURL(/\/callback\?/);
     const q = new URL(T.page.url()).searchParams;
@@ -664,6 +793,26 @@ await scenario('redirect: signs and returns to the registered https callback wit
     await verifyAssertion(T, { credentialId: q.get('credentialId'), signature: q.get('signature'), clientDataJson: q.get('clientDataJSONReturn'), authenticatorData: q.get('authenticatorDataReturn') }, messageChallenge(Buffer.from(text)));
     check(q.get('msg'), 'msg present');
     return { fields: [...q.keys()] };
+  } finally {
+    await T.context.close();
+  }
+});
+
+await scenario('redirect: a registered destination opened from another site: the change LazorKit can\'t show is a danger, with that site as a caution', async () => {
+  const T = await newPage({ url: `${DAPP_B}/` });
+  try {
+    const { credentials } = await A.cdp.send('WebAuthn.getCredentials', { authenticatorId: A.authenticatorId });
+    await T.cdp.send('WebAuthn.addCredential', { authenticatorId: T.authenticatorId, credential: credentials[0] });
+    const query = `action=sign&message=${b64url(randomBytes(32))}&credentialId=${cred()}&redirect_url=${encodeURIComponent(`${DAPP}/callback?state=x`)}`;
+    await T.page.evaluate((url) => {
+      location.href = url;
+    }, `${PORTAL_T}/?${query}`);
+    await T.page.waitForSelector('[data-testid=approval-review]');
+    check((await T.page.getAttribute('[data-testid=requester]', 'data-channel')) === 'redirect', 'redirect channel');
+    check((await T.page.textContent('[data-testid=requester-badge]')).includes('Registered link'), 'the destination is registered');
+    check((await T.page.getAttribute('[data-testid=approval-review]', 'data-tier')) === 'danger', 'danger: a registered destination is not a verified requester');
+    check((await T.page.textContent('[data-testid=caution]')).includes('This request was opened from another site: 127.0.0.1:5175.'), 'the opening site, as a caution');
+    await shot(T.page, 'redirect-opened-elsewhere');
   } finally {
     await T.context.close();
   }
@@ -681,13 +830,27 @@ await scenario('redirect: an unregistered https destination is refused and not n
   }
 });
 
-await scenario('redirect: an unregistered app scheme is shown as not registered in transition, refused in enforce', async () => {
+await scenario('redirect: an unregistered app scheme is shown as an app on this phone in transition, with a way back after approving; refused in enforce', async () => {
   const query = `action=sign&message=${b64url(messageChallenge(Buffer.from('x')))}&displayMessage=x&credentialId=${cred()}&redirect_url=${encodeURIComponent('newapp://cb')}`;
   const T = await topLevel(query);
+  let detail = null;
   try {
     check((await T.page.textContent('[data-testid=requester-origin]')) === 'newapp://cb', 'the destination shown in full');
-    check((await T.page.textContent('[data-testid=requester-badge]')).includes('Not registered'), 'badge');
+    check((await T.page.textContent('[data-testid=requester-name]')) === 'An app on this phone', 'an app, never a verified one');
+    check(!(await T.page.$('[data-testid=requester-badge]')), 'no badge for an app scheme');
     await T.page.waitForSelector('[data-testid=message-review]');
+    // Approved: the answer goes to the app, and "Back to the app" sends the same answer there again.
+    const attempts = [];
+    await T.page.exposeFunction('e2eNavigate', (url) => attempts.push(url));
+    await T.page.evaluate(() => navigation.addEventListener('navigate', (e) => window.e2eNavigate(e.destination.url)));
+    await press(T.page, '[data-testid=approve]');
+    await T.page.waitForSelector('[data-testid=back-to-app]');
+    check((await T.page.textContent('[data-testid=back-to-app]')) === 'Back to the app', 'a way back');
+    await T.page.click('[data-testid=back-to-app]');
+    await sleep(500);
+    check(T.page.url().startsWith(PORTAL_T), 'still on the portal');
+    check(attempts.length === 2 && attempts[0].startsWith('newapp://cb?') && attempts[1] === attempts[0], `the same answer, to the same app: ${attempts.map((u) => u.split('?')[0]).join(', ')}`);
+    detail = { navigations: attempts.map((u) => u.split('?')[0]) };
   } finally {
     await T.context.close();
   }
@@ -697,6 +860,7 @@ await scenario('redirect: an unregistered app scheme is shown as not registered 
   } finally {
     await E.context.close();
   }
+  return detail;
 });
 
 await scenario('redirect: a browser hand-off scheme is refused in transition too, and Close goes nowhere', async () => {

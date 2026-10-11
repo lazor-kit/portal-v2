@@ -17,9 +17,11 @@ export const DAPP = 'http://localhost:5174';
 /** The portal builds the run serves: the committed policy (transition), and every gate at enforce. */
 export const PORTAL_T = 'http://localhost:4173';
 export const PORTAL_E = 'http://localhost:4174';
+/** A fee payer key registered to the test dApp alone (Keypair.fromSeed of 32 bytes of 7). */
+export const DAPP_FEE_PAYER = 'GmaDrppBC7P5ARKV8g3djiwP89vz1jLK23V2GBjuAEGB';
 export const REGISTRY = {
   version: 1,
-  apps: [{ id: 'e2e-dapp', name: 'E2E dApp', origins: [DAPP], redirects: [`${DAPP}/callback`, 'e2eapp://'] }],
+  apps: [{ id: 'e2e-dapp', name: 'E2E dApp', origins: [DAPP], redirects: [`${DAPP}/callback`, 'e2eapp://'], feePayers: [DAPP_FEE_PAYER] }],
 };
 
 function enforce(policy) {
@@ -33,10 +35,15 @@ function enforce(policy) {
   };
 }
 
-async function buildPortal(name, policy) {
+/**
+ * One portal build in e2e/.out/portal-<name>, with `policy`, `registry` and,
+ * when given, `programs` (config/programs.json) in place of the committed files.
+ */
+export async function buildPortal(name, policy, { registry: registryJson = REGISTRY, programs } = {}) {
   const dir = join(OUT, `config-${name}`);
   mkdirSync(dir, { recursive: true });
-  const registry = parseRegistry(REGISTRY);
+  const registry = parseRegistry(registryJson);
+  if (programs) writeFileSync(join(dir, 'programs.json'), JSON.stringify(programs, null, 2));
   const checked = parsePolicy(policy);
   writeFileSync(join(dir, 'portal-policy.json'), JSON.stringify(checked, null, 2));
   writeFileSync(join(dir, 'registry.json'), JSON.stringify(registry, null, 2));
@@ -50,6 +57,7 @@ async function buildPortal(name, policy) {
       alias: [
         { find: /^\.\.\/config\/portal-policy\.json$/, replacement: join(dir, 'portal-policy.json') },
         { find: /^\.\.\/config\/registry\.json$/, replacement: join(dir, 'registry.json') },
+        ...(programs ? [{ find: /^\.\.\/config\/programs\.json$/, replacement: join(dir, 'programs.json') }] : []),
       ],
     },
   });
