@@ -88,7 +88,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.21.0",
-    "@lazorkit/sdk-legacy": "1.4.0",
+    "@lazorkit/sdk-legacy": "2.1.0",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",

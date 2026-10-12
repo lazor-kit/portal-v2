@@ -417,7 +417,7 @@ async function main() {
   });
 
   await scenario('createSession: the counter moves forward before Approve (another approval landed); the portal signs the chain counter and it lands', async () => {
-    const actions = [Actions.solRecurringLimit({ limit: 10_000_000n, window: 86_400n })];
+    const actions = [Actions.solRecurringLimit({ limit: 10_000_000n, windowSeconds: 86_400n })];
     const p = await prepareCreate({ actions });
     const pending = open(p.url);
     const f = await review(await frame());
@@ -524,7 +524,7 @@ async function main() {
 
   await scenario('removeAuthority: a Delegate key added with sdk-legacy, then removed through the portal', async () => {
     const delegate = Keypair.generate();
-    const add = await client.prepareAddAuthority({ payer: payer.publicKey, walletPda: wallet, secp256r1: secp(), newAuthority: { type: 'ed25519', publicKey: delegate.publicKey }, role: ROLE_SPENDER, policy: serializeActions([Actions.tokenRecurringLimit({ mint: usdc, limit: 50_000_000n, window: 86_400n })]) });
+    const add = await client.prepareAddAuthority({ payer: payer.publicKey, walletPda: wallet, secp256r1: secp(), newAuthority: { type: 'ed25519', publicKey: delegate.publicKey }, role: ROLE_SPENDER, policy: serializeActions([Actions.tokenRecurringLimit({ mint: usdc, limit: 50_000_000n, windowSeconds: 86_400n })]) });
     await send(client.finalizeAddAuthority(add, softSign(add.challenge)).instructions);
     const target = add.newAuthorityPda;
     const preparedSlot = await currentSlot();

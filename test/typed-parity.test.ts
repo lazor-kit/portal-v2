@@ -22,6 +22,7 @@ function stubConnection(counter: number) {
   return {
     commitment: 'confirmed',
     rpcEndpoint: 'http://stub.invalid',
+    getAccountInfo: async () => null,
     getAccountInfoAndContext: async () => ({ context: { slot: 1 }, value: { data, owner: PROGRAM_ID_DEVNET, lamports: 1, executable: false } }),
   };
 }
@@ -45,7 +46,7 @@ function randomActions(): unknown[] {
         if (once('solLimit')) out.push(Actions.solLimit(u64(), exp()));
         break;
       case 1:
-        if (once('solRec')) out.push(Actions.solRecurringLimit({ limit: u64(), window: BigInt(randomInt(1, 10_000_000)), expiresAt: exp() }));
+        if (once('solRec')) out.push(Actions.solRecurringLimit({ limit: u64(), windowSeconds: BigInt(randomInt(1, 10_000_000)), expiresAt: exp() }));
         break;
       case 2:
         if (once('solMax')) out.push(Actions.solMaxPerTx(u64(), exp()));
@@ -54,7 +55,7 @@ function randomActions(): unknown[] {
         if (once(`tl${mint}`)) out.push(Actions.tokenLimit({ mint, remaining: u64(), expiresAt: exp() }));
         break;
       case 4:
-        if (once(`tr${mint}`)) out.push(Actions.tokenRecurringLimit({ mint, limit: u64(), window: BigInt(randomInt(1, 10_000_000)), expiresAt: exp() }));
+        if (once(`tr${mint}`)) out.push(Actions.tokenRecurringLimit({ mint, limit: u64(), windowSeconds: BigInt(randomInt(1, 10_000_000)), expiresAt: exp() }));
         break;
       case 5:
         if (once(`tm${mint}`)) out.push(Actions.tokenMaxPerTx({ mint, max: u64(), expiresAt: exp() }));
