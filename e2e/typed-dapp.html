@@ -13,9 +13,10 @@
     // Only the run's own portal is ever framed.
     const PORTAL = new URLSearchParams(location.search).get('portal');
     window.lkt = {
-      open(url, timeoutMs = 180000) {
+      open(url, timeoutMs = 180000, { sync = false } = {}) {
         if (!url.startsWith(`${PORTAL}/`)) throw new Error('not the run portal');
         return new Promise((resolve) => {
+          const timers = [];
           const iframe = document.createElement('iframe');
           iframe.allow = `publickey-credentials-get ${PORTAL}; publickey-credentials-create ${PORTAL}`;
           iframe.id = 'typed';
@@ -23,6 +24,7 @@
           const done = (value) => {
             window.removeEventListener('message', onMessage);
             clearTimeout(timer);
+            timers.forEach(clearTimeout);
             iframe.remove();
             resolve(value);
           };
@@ -33,6 +35,16 @@
           const timer = setTimeout(() => done({ timeout: true }), timeoutMs);
           iframe.src = url;
           document.body.appendChild(iframe);
+          // As @lazorkit/wallet's dialog does on a sign request: 500 ms after
+          // the frame opens, SYNC_CREDENTIALS, then the same message again
+          // after 200, 400, 800, 1500 and 3000 ms.
+          if (sync) {
+            timers.push(setTimeout(() => {
+              const message = { type: 'SYNC_CREDENTIALS', data: { credentialId: '', publickey: '', smartWalletAddress: '', timestamp: Date.now() } };
+              iframe.contentWindow?.postMessage(message, PORTAL);
+              for (const delay of [200, 400, 800, 1500, 3000]) timers.push(setTimeout(() => iframe.contentWindow?.postMessage(message, PORTAL), delay));
+            }, 500));
+          }
         });
       },
       /** Changes the open frame's fragment: a navigation within the page, no reload. */

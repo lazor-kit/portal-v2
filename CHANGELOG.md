@@ -22,6 +22,11 @@
   wallet look missing: such answers are read again for about 9 seconds,
   then the request is refused as `chain-unavailable` (Try again), never as
   `request-invalid`.
+  A typed request is read from the chain once per screen, then its
+  authority and the Clock once a second: the credential syncs the SDK posts
+  while the dialog opens no longer start the reads over (createSession with
+  `@lazorkit/wallet` 4.0.0-next.0 made 37-41 reads before Approve could be
+  pressed; now 5, then one a second). A refusal stays until Try again.
 
 - The portal signs only recognised challenge formats: LazorKit signed
   messages (shown as their text, which must match the challenge),
