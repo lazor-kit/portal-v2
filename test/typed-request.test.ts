@@ -14,7 +14,7 @@ import type { Requester } from '../src/security/requester.ts';
 import { bindAtApprove, MAX_BEHIND_MS, MAX_SNAPSHOT_AGE_MS, snapshotVerdict, typedReply } from '../src/typed/approve.ts';
 import { captureFragment, capturedFragment, fragmentTampered, onFragmentTampered } from '../src/typed/fragment.ts';
 import { parsePrograms } from '../src/typed/programs.ts';
-import { readSnapshot, readTypedChain } from '../src/typed/reads.ts';
+import { readSnapshot, readTypedChain, RENT_PAYER_ONLY } from '../src/typed/reads.ts';
 import { checkTypedRequest } from '../src/typed/request.ts';
 import { needsHoldings } from '../src/typed/screen.ts';
 import { addr, CONFIG, passkeyAuthority, sample, DEVNET_USDC, ed25519Authority, fragmentOf, mintData, NOW, PROGRAM, sessionData, SLOT, TOKEN, world } from './typed-fixtures.ts';
@@ -199,6 +199,84 @@ test('request-invalid: whatever the program would refuse is refused before anyth
 });
 
 const addrBytes = (a: string) => addressBytes(a)!;
+
+type Revoke = Extract<ApprovalRequest, { kind: 'revokeSession' }>;
+type Remove = Extract<ApprovalRequest, { kind: 'removeAuthority' }>;
+
+test('rent refunds (layout revision 2): a revoked session or removed authority refunds only to the payer it records', async () => {
+  // RevokeSession: the refund is the recorded payer.
+  const refund = addr();
+  const good = world('revokeSession', { session: addr(), refund });
+  good.chain.set((good.req as Revoke).args.session, PROGRAM, sessionData({ wallet: good.wallet, sessionKey: addr(), expiresAt: NOW + 100n, actions: sample.solLimit(5n), rentPayer: refund }));
+  const shown = await read(good);
+  assert.ok(shown.ok, !shown.ok ? shown.reason : '');
+  assert.equal(shown.view.session?.rentPayer, refund);
+  assert.equal(shown.view.session?.rules.length, 1, 'the actions are read after the payer');
+
+  // Anywhere else is refused before anything is signed, the app's own fee payer included.
+  for (const other of ['another address', 'the fee payer'] as const) {
+    const payer = addr();
+    const w = world('revokeSession', { session: addr(), refund: other === 'the fee payer' ? payer : addr() }, { payer });
+    w.chain.set((w.req as Revoke).args.session, PROGRAM, sessionData({ wallet: w.wallet, sessionKey: addr(), expiresAt: NOW + 100n, rentPayer: addr() }));
+    const r = await read(w);
+    assert.equal(!r.ok && r.code, 'request-invalid', other);
+    assert.equal(!r.ok && r.reason, RENT_PAYER_ONLY, other);
+  }
+
+  // RemoveAuthority: an Ed25519 Delegate with a policy, and a passkey Admin.
+  for (const kind of ['ed25519', 'passkey'] as const) {
+    const payer = addr();
+    const make = (refundTo: string) => {
+      const w = world('removeAuthority', { target: addr(), refund: refundTo }, { ownerCount: 2 });
+      const target = (w.req as Remove).args.target;
+      w.chain.set(
+        target,
+        PROGRAM,
+        kind === 'ed25519'
+          ? ed25519Authority({ wallet: w.wallet, publicKey: addr(), role: 2, policy: sample.solMax(7n), rentPayer: payer })
+          : passkeyAuthority({ wallet: w.wallet, credentialId: randomBytes(20), role: 1, rentPayer: payer }),
+      );
+      return w;
+    };
+    const ok = await read(make(payer));
+    assert.ok(ok.ok, `${kind}: ${!ok.ok ? ok.reason : ''}`);
+    assert.equal(ok.view.target?.rentPayer, payer);
+    if (kind === 'ed25519') assert.deepEqual(ok.view.target?.rules.map((a) => a.type), ['solMaxPerTx'], 'the policy is read after the payer');
+    const wrong = await read(make(addr()));
+    assert.equal(!wrong.ok && wrong.reason, RENT_PAYER_ONLY, kind);
+  }
+});
+
+test('rent refunds (layout revision 1): an account that records no payer refunds where the request says', async () => {
+  const revoke = world('revokeSession', { session: addr(), refund: addr() });
+  revoke.chain.set((revoke.req as Revoke).args.session, PROGRAM, sessionData({ wallet: revoke.wallet, sessionKey: addr(), expiresAt: NOW + 100n }));
+  const r = await read(revoke);
+  assert.ok(r.ok && r.view.session?.rentPayer === null);
+  const remove = world('removeAuthority', { target: addr(), refund: addr() });
+  remove.chain.set((remove.req as Remove).args.target, PROGRAM, ed25519Authority({ wallet: remove.wallet, publicKey: addr(), role: 2 }));
+  const t = await read(remove);
+  assert.ok(t.ok && t.view.target?.rentPayer === null);
+  // The other refusals still apply to either revision.
+  const session = addr();
+  const self = world('revokeSession', { session, refund: session });
+  self.chain.set(session, PROGRAM, sessionData({ wallet: self.wallet, sessionKey: addr(), expiresAt: NOW + 10n, rentPayer: session }));
+  assert.equal((await read(self)).ok, false, 'a revision-2 session recording itself as payer still cannot refund to itself');
+});
+
+test('a revision-2 passkey signs: its counter and key read as before; an unknown revision is not this account', async () => {
+  const w = world('createSession', createArgs(), { signerRentPayer: addr(), counter: 11 });
+  const r = await read(w);
+  assert.ok(r.ok, !r.ok ? r.reason : '');
+  assert.equal(r.view.signer.counter, 11);
+  const snap = await readSnapshot(w.chain.transport, w.req, () => 0);
+  assert.equal(snap?.counter, 11);
+  const newer = world('createSession', createArgs());
+  const data = Buffer.from(newer.chain.accounts.get(newer.authority)!.data);
+  data[4] = 3;
+  newer.chain.set(newer.authority, PROGRAM, data);
+  const refused = await read(newer);
+  assert.equal(!refused.ok && refused.reason, "The passkey it names isn't part of this account.");
+});
 
 test('chain-unavailable: reads that fail are not guessed at', async () => {
   const w = world('createSession', createArgs());
