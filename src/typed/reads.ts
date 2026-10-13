@@ -355,6 +355,7 @@ function checkTypedState(
     if (!rules.ok) return invalid("LazorKit can't read the permission's limits.");
     if (cannotPayOrReceive.has(req.payer) || req.payer === req.args.session) return invalid("The fee payer it names can't pay for this.");
     if (cannotPayOrReceive.has(req.args.refund) || req.args.refund === req.args.session) return invalid("The deposit can't go back to the address it names.");
+    if (!refundAllowed(session, req.args.refund)) return invalid(RENT_PAYER_ONLY);
     return { ok: true, view: { ...view, session: { ...session, rules: rules.actions } } };
   }
   const [targetAcc] = rest;
@@ -369,8 +370,23 @@ function checkTypedState(
   if (!rules.ok) return invalid("LazorKit can't read that key's limits.");
   if (cannotPayOrReceive.has(req.payer) || req.payer === req.args.target) return invalid("The fee payer it names can't pay for this.");
   if (cannotPayOrReceive.has(req.args.refund) || req.args.refund === req.args.target) return invalid("The deposit can't go back to the address it names.");
+  if (!refundAllowed(target, req.args.refund)) return invalid(RENT_PAYER_ONLY);
   return { ok: true, view: { ...view, target: { ...target, rules: rules.actions } } };
 }
+
+/**
+ * The program's refund rule for closing an authority or a session
+ * (lazorkit-protocol #62, `RefundDestinationMismatch` 3039; sdk-legacy 2.1.0
+ * `refund-not-rent-payer`): an account of layout revision 2 refunds its rent
+ * only to the payer it records; a revision-1 account records none and refunds
+ * wherever the request says.
+ */
+export function refundAllowed(account: { readonly rentPayer: string | null }, refund: string): boolean {
+  return account.rentPayer === null || account.rentPayer === refund;
+}
+
+/** The refusal when the refund isn't the recorded rent payer (sdk-legacy's `refund-not-rent-payer`). */
+export const RENT_PAYER_ONLY = 'Its rent can only go back to the app that paid it, and this request sends it somewhere else.';
 
 const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 

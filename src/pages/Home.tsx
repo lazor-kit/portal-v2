@@ -105,6 +105,13 @@ function approvingFor(subject: Subject | null, preview: PreviewState, name: stri
   }
 }
 
+/** `value`, or the one before when it is the same JSON: a re-render that changes nothing keeps what depends on it. */
+function useUnchanged<T>(value: T): T {
+  const kept = useRef(value)
+  if (kept.current !== value && JSON.stringify(kept.current) !== JSON.stringify(value)) kept.current = value
+  return kept.current
+}
+
 export default function Home() {
   const request = useMemo(() => readPortalRequest(window.location.search), [])
   const framed = useMemo(() => isFramed(), [])
@@ -128,7 +135,10 @@ export default function Home() {
     return () => window.clearTimeout(timer)
   }, [])
 
-  const requester = useMemo(() => resolveRequester(requesterInput(messages, request.redirectUrl)), [messages, request.redirectUrl])
+  // Every message from the app re-renders the page (the SDK syncs credentials
+  // up to six times); one that changes nothing about who is asking keeps the
+  // same requester, so nothing decided from it is worked out again.
+  const requester = useUnchanged(useMemo(() => resolveRequester(requesterInput(messages, request.redirectUrl)), [messages, request.redirectUrl]))
   const redirect = useMemo(
     () =>
       requester.channel === "redirect" && request.redirectUrl

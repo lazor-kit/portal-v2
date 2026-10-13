@@ -151,6 +151,7 @@ test('recorded v2 accounts decode: an Admin key, a passkey Owner, sessions with 
   for (const authority of [admin, owner]) {
     assert.equal(authority?.wallet, WALLET.wallet);
     assert.equal(authority?.policy, null);
+    assert.equal(authority?.rentPayer, null, 'recorded at layout revision 1');
   }
   const sessions = WALLET.accounts.session.value.map((row) => decodeSession(row.pubkey, bytesOf(row)));
   assert.deepEqual(sessions.map((s) => s?.actions.length).sort(), [0, 51]);
@@ -161,7 +162,7 @@ test('recorded v2 accounts decode: an Admin key, a passkey Owner, sessions with 
   }
 });
 
-test('decoders accept only a v2 account of the current layout, policy and all', () => {
+test('decoders accept only a v2 account of a layout revision they know, policy and all', () => {
   const wallet = bs58.decode(WALLET.wallet);
   const spender = new Uint8Array(48 + 32 + 19);
   spender.set([0x22, 0, 2, 255, 1]);
@@ -172,9 +173,12 @@ test('decoders accept only a v2 account of the current layout, policy and all', 
   const decoded = decodeAuthority('x', spender);
   assert.equal(decoded?.role, 'spender');
   assert.deepEqual(decoded?.policy, spender.slice(80));
+  assert.equal(decoded?.rentPayer, null, 'revision 1 records no rent payer');
 
   const variant = (patch: (data: Uint8Array) => Uint8Array) => decodeAuthority('x', patch(spender.slice()));
-  assert.equal(variant((d) => ((d[4] = 2), d)), null, 'a newer layout version');
+  assert.equal(variant((d) => ((d[4] = 3), d)), null, 'a newer layout revision');
+  assert.equal(variant((d) => ((d[4] = 0), d)), null, 'revision 0');
+  assert.equal(variant((d) => ((d[4] = 2), d)), null, 'revision 2 without room for its rent payer and policy');
   assert.equal(variant((d) => ((d[0] = 0x02), d)), null, 'a v1 discriminator');
   assert.equal(variant((d) => ((d[2] = 3), d)), null, 'an unknown role');
   assert.equal(variant((d) => ((d[1] = 1), d)), null, 'a passkey too short for its key');
@@ -204,15 +208,104 @@ test('a wallet’s authorities, sessions and deferred executions, through the ro
   assert.deepEqual(seen.map((s) => s.method), ['getProgramAccounts', 'getProgramAccounts', 'getProgramAccounts']);
 });
 
+test('layout revision 2: the rent payer after the fixed part, the policy and actions after it', () => {
+  const wallet = bs58.decode(WALLET.wallet);
+  const payer = new Uint8Array(32).fill(0x5a);
+  const policy = Uint8Array.from([1, ...new Array(18).fill(3)]);
+  const spender = new Uint8Array(80 + 32 + policy.length);
+  spender.set([0x22, 0, 2, 255, 2]);
+  new DataView(spender.buffer).setUint16(12, policy.length, true);
+  spender.set(wallet, 16);
+  spender.set(new Uint8Array(32).fill(7), 48);
+  spender.set(payer, 80);
+  spender.set(policy, 112);
+  const ed = decodeAuthority('x', spender);
+  assert.equal(ed?.role, 'spender');
+  assert.equal(ed?.key.type === 'ed25519' && ed.key.publicKey, bs58.encode(new Uint8Array(32).fill(7)));
+  assert.equal(ed?.rentPayer, bs58.encode(payer));
+  assert.deepEqual(ed?.policy, policy, 'the policy starts after the payer (112), not at 80');
+  assert.equal(decodeAuthority('x', spender.slice(0, spender.length - 1)), null, 'a policy longer than the account');
+  // Without a policy: exactly key material and payer.
+  const bare = spender.slice(0, 112);
+  new DataView(bare.buffer).setUint16(12, 0, true);
+  assert.equal(decodeAuthority('x', bare)?.policy, null);
+  assert.equal(decodeAuthority('x', bare)?.rentPayer, bs58.encode(payer));
+  assert.equal(decodeAuthority('x', bare.slice(0, 111)), null, 'no room for the payer');
+
+  const passkey = new Uint8Array(145 + 32 + policy.length);
+  passkey.set([0x22, 1, 1, 254, 2]);
+  new DataView(passkey.buffer).setUint32(8, 41, true);
+  new DataView(passkey.buffer).setUint16(12, policy.length, true);
+  passkey.set(wallet, 16);
+  passkey.set(new Uint8Array(32).fill(1), 48);
+  passkey.set([2, ...new Array(32).fill(4)], 80);
+  passkey.set(new Uint8Array(32).fill(9), 113);
+  passkey.set(payer, 145);
+  passkey.set(policy, 177);
+  const pk = decodeAuthority('p', passkey);
+  assert.equal(pk?.role, 'admin');
+  assert.equal(pk?.counter, 41);
+  assert.ok(pk?.key.type === 'passkey' && pk.key.rpIdHash === '09'.repeat(32) && pk.key.publicKey === `02${'04'.repeat(32)}`);
+  assert.equal(pk?.rentPayer, bs58.encode(payer));
+  assert.deepEqual(pk?.policy, policy, 'the policy starts at 177');
+  assert.equal(decodeAuthority('p', passkey.slice(0, 176)), null);
+
+  const actions = Uint8Array.from([1, 8, 0, ...new Array(8).fill(0), ...new Array(8).fill(6)]);
+  const session = new Uint8Array(80 + 32 + actions.length);
+  session.set([0x23, 255, 2]);
+  session.set(wallet, 8);
+  session.set(new Uint8Array(32).fill(8), 40);
+  new DataView(session.buffer).setBigUint64(72, 1_800_000_000n, true);
+  session.set(payer, 80);
+  session.set(actions, 112);
+  const s = decodeSession('s', session);
+  assert.equal(s?.wallet, WALLET.wallet);
+  assert.equal(s?.expiresAt, 1_800_000_000n);
+  assert.equal(s?.rentPayer, bs58.encode(payer));
+  assert.deepEqual(s?.actions, actions, 'the actions start at 112, not at 80');
+  assert.deepEqual(decodeSession('s', session.slice(0, 112))?.actions, new Uint8Array(0));
+  assert.equal(decodeSession('s', session.slice(0, 111)), null, 'no room for the payer');
+  // The same bytes read as revision 1 would take the payer for actions: only the revision byte says which.
+  const asRev1 = session.slice();
+  asRev1[2] = 1;
+  assert.equal(decodeSession('s', asRev1)?.rentPayer, null);
+  assert.equal(decodeSession('s', asRev1)?.actions.length, 32 + actions.length);
+  for (const revision of [0, 3, 255]) {
+    const other = session.slice();
+    other[2] = revision;
+    assert.equal(decodeSession('s', other), null, `session revision ${revision}`);
+  }
+});
+
 test('an account of a newer layout is counted as unreadable, never guessed at', async () => {
   const newer = structuredClone(WALLET);
   const row = newer.accounts.session.value[0];
   const data = bytesOf(row);
-  data[2] = 2;
+  data[2] = 3;
   row.account.data[0] = Buffer.from(data).toString('base64');
   const accounts = ok(await readWalletAccounts(through(newer), 'devnet', WALLET.wallet));
   assert.equal(accounts.sessions.length, 1);
   assert.equal(accounts.unreadable, 1);
+});
+
+test('a revision-2 session next to revision-1 accounts, through the route: its actions read after the payer', async () => {
+  const mixed = structuredClone(WALLET);
+  const row = mixed.accounts.session.value.find((r) => bytesOf(r).length > 80)!;
+  const rev1 = bytesOf(row);
+  const payer = new Uint8Array(32).fill(0x3c);
+  const rev2 = new Uint8Array(rev1.length + 32);
+  rev2.set(rev1.subarray(0, 80));
+  rev2[2] = 2;
+  rev2.set(payer, 80);
+  rev2.set(rev1.subarray(80), 112);
+  row.account.data[0] = Buffer.from(rev2).toString('base64');
+  const accounts = ok(await readWalletAccounts(through(mixed), 'devnet', WALLET.wallet));
+  assert.equal(accounts.unreadable, 0);
+  assert.equal(accounts.sessions.length, 2);
+  const read = accounts.sessions.find((s) => s.address === row.pubkey)!;
+  assert.equal(read.rentPayer, bs58.encode(payer));
+  assert.deepEqual(read.actions, rev1.slice(80));
+  assert.equal(accounts.sessions.find((s) => s.address !== row.pubkey)?.rentPayer, null);
 });
 
 test('a vault’s SOL and token accounts, through the route', async () => {

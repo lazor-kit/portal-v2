@@ -291,7 +291,18 @@ async function main() {
     await f.click(selector);
   }
   const shot = (name) => page.screenshot({ path: join(SHOTS, `${name}.png`) }).catch(() => {});
-  const open = (url) => page.evaluate((u) => window.lkt.open(u), url);
+  const open = (url, options = {}) => page.evaluate(([u, o]) => window.lkt.open(u, undefined, o), [url, options]);
+  /** Every /api/rpc read the portal makes, with when it was sent and what it asked for. */
+  const reads = [];
+  page.on('request', (r) => {
+    if (!r.url().startsWith(`${PORTAL}/api/rpc`)) return;
+    try {
+      const body = JSON.parse(r.postData() ?? '{}');
+      reads.push({ at: Date.now(), method: body.method, keys: Array.isArray(body.params?.[0]) ? body.params[0] : [] });
+    } catch {
+      reads.push({ at: Date.now(), method: null, keys: [] });
+    }
+  });
   const at = (unix) => new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }).format(new Date(Number(unix) * 1000)).replace(/ /g, ' ');
 
   async function scenario(name, fn) {
@@ -312,6 +323,61 @@ async function main() {
 
   const usdc = new PublicKey(DEVNET_USDC);
   let firstSession = null;
+
+  await scenario('one review reads the request once while the app syncs credentials (≤ 2 full reads, then a snapshot a second)', async () => {
+    // The bench's createSession: a per-payment SOL limit and no total, so the vault's holdings are read too.
+    const p = await prepareCreate({ actions: [Actions.solMaxPerTx(2_000_000n)] });
+    const from = reads.length;
+    const opened = Date.now();
+    const pending = open(p.url, { sync: true });
+    await page.waitForSelector('iframe#typed', { timeout: 15_000 });
+    const f = await (await page.$('iframe#typed')).contentFrame();
+    await f.waitForSelector('[data-testid=requester]', { timeout: 15_000 });
+    // Every change of the screen's loading state and of Approve's guard, with when it happened.
+    await f.evaluate(() => {
+      const seen = (window.__lkGuard = []);
+      let last = '';
+      window.setInterval(() => {
+        const guard = document.querySelector('[data-testid=approve]')?.getAttribute('data-guard') ?? null;
+        const loading = document.querySelector('[data-testid=typed-review]')?.getAttribute('data-loading') ?? null;
+        if (`${guard}|${loading}` !== last) seen.push({ at: Date.now(), guard, loading });
+        last = `${guard}|${loading}`;
+      }, 10);
+    });
+    await f.waitForSelector('[data-testid=approve]', { timeout: 20_000 });
+    await f.hover('[data-testid=approve]', { force: true });
+    await f.waitForSelector('[data-testid=approve][data-guard=ready]', { timeout: 20_000 });
+    // Past the app's last sync (3.5 s after open) and a few snapshots more.
+    await sleep(Math.max(0, 6000 - (Date.now() - opened)));
+    const mine = reads.slice(from);
+    const windowMs = Date.now() - opened;
+    const guard = await f.evaluate(() => window.__lkGuard);
+    const readyAt = guard.filter((g) => g.guard === 'ready').map((g) => g.at - opened);
+    // When Approve became clickable for good (it stays so to the end of the window), and how often the screen went back to loading.
+    const armedMs = guard.at(-1)?.guard === 'ready' ? guard.at(-1).at - opened : null;
+    const reloads = guard.filter((g, i) => g.loading === 'true' && i > 0 && guard[i - 1].loading === 'false').length;
+    // The snapshot is the authority and the Clock; the full read starts with the wallet.
+    const isSnapshot = (r) => r.method === 'getMultipleAccounts' && r.keys.length === 2 && r.keys[0] === authority.toBase58();
+    const isState = (r) => r.method === 'getMultipleAccounts' && r.keys[0] === wallet.toBase58();
+    const counts = {
+      total: mine.length,
+      state: mine.filter(isState).length,
+      snapshots: mine.filter(isSnapshot).length,
+      getBalance: mine.filter((r) => r.method === 'getBalance').length,
+      getTokenAccountsByOwner: mine.filter((r) => r.method === 'getTokenAccountsByOwner').length,
+      byMethod: Object.fromEntries([...new Set(mine.map((r) => r.method))].map((m) => [m, mine.filter((r) => r.method === m).length])),
+    };
+    say(`review reads over ${windowMs} ms: ${JSON.stringify(counts)}; Approve clickable for good at ${armedMs} ms (ready at ${readyAt.join(', ')} ms), back to loading ${reloads}x`);
+    await f.click('[data-testid=cancel]');
+    const reply = await pending;
+    check(reply.data?.error?.code === 'user-rejected', JSON.stringify(reply.data));
+    check(armedMs !== null, 'Approve is clickable at the end');
+    check(counts.state >= 1 && counts.state <= 2, `full reads ${counts.state}`);
+    check(counts.getBalance <= 2, `vault reads ${counts.getBalance}`);
+    // One snapshot when the screen is ready, then one a second.
+    check(counts.snapshots <= Math.ceil(windowMs / 1000) + 2, `snapshots ${counts.snapshots} in ${windowMs} ms`);
+    return { armedMs, readyAt, reloads, windowMs, ...counts };
+  });
 
   await scenario('createSession: the limits on screen; approved after 70 s, it still lands (the slot is picked at Approve)', async () => {
     const actions = [Actions.solLimit(20_000_000n), Actions.solMaxPerTx(2_000_000n), Actions.tokenLimit({ mint: usdc, remaining: 5_000_000n }), Actions.tokenMaxPerTx({ mint: usdc, max: 1_000_000n })];
@@ -342,13 +408,16 @@ async function main() {
     check(typed.counter === p.counter, 'counter as prepared');
     const session = await connection.getAccountInfo(p.prepared.sessionPda, 'confirmed');
     check(session && session.data.readBigUInt64LE(72) === p.expiresAt, 'the session landed with the expiry shown');
-    check(Buffer.from(session.data.subarray(80)).equals(Buffer.from(serializeActions(actions))), 'with the limits shown');
+    // Layout revision 2 (lazorkit-protocol #62) records the rent payer at 80..112, before the actions.
+    const rev2 = session.data[2] === 2;
+    if (rev2) check(new PublicKey(session.data.subarray(80, 112)).equals(payer.publicKey), 'the fee payer is recorded as the rent payer');
+    check(Buffer.from(session.data.subarray(rev2 ? 112 : 80)).equals(Buffer.from(serializeActions(actions))), 'with the limits shown');
     firstSession = { pda: p.prepared.sessionPda, expiresAt: p.expiresAt };
     return { waitedMs: Date.now() - started, slotsBetween: Number(BigInt(typed.slot) - p.preparedSlot), sig };
   });
 
   await scenario('createSession: the counter moves forward before Approve (another approval landed); the portal signs the chain counter and it lands', async () => {
-    const actions = [Actions.solRecurringLimit({ limit: 10_000_000n, window: 86_400n })];
+    const actions = [Actions.solRecurringLimit({ limit: 10_000_000n, windowSeconds: 86_400n })];
     const p = await prepareCreate({ actions });
     const pending = open(p.url);
     const f = await review(await frame());
@@ -398,8 +467,38 @@ async function main() {
     check(reply.data?.error?.code === 'user-rejected', 'rejected');
   });
 
+  await scenario('revokeSession on a revision-2 session: a refund to anyone but the rent payer is refused before the passkey signs', async () => {
+    check(firstSession, 'needs the first session');
+    const account = await connection.getAccountInfo(firstSession.pda, 'confirmed');
+    if (account.data[2] !== 2) return { skipped: 'the program writes layout revision 1 (no rent payer)' };
+    // sdk-legacy 2.1.0 refuses to prepare it (RefundDestinationMismatchError), so the challenge is the portal's
+    // own recipe (test/typed-parity.test.ts holds it equal to the SDK's).
+    const { decodeApprovalRequest, preparedChallenge } = await import('../src/approval/index.ts');
+    const elsewhere = Keypair.generate().publicKey;
+    const preparedSlot = await currentSlot();
+    const counter = (await counterOf()) + 1;
+    const args = { session: firstSession.pda.toBase58(), refund: elsewhere.toBase58() };
+    const probe = typedUrl({ kind: 'revokeSession', args, counter, preparedSlot, challenge: new Uint8Array(32) });
+    const decoded = decodeApprovalRequest(probe.split('lk1=')[1]);
+    check(decoded.ok, 'the request decodes');
+    const challenge = preparedChallenge(decoded.request);
+    const before = await signCount();
+    const pending = open(typedUrl({ kind: 'revokeSession', args, counter, preparedSlot, challenge }));
+    const f = await frame();
+    await f.waitForSelector('[data-testid=refusal]', { timeout: 30_000 });
+    check((await f.getAttribute('[data-testid=refusal]', 'data-reason')) === 'request-invalid', `refused: ${await f.getAttribute('[data-testid=refusal]', 'data-reason')}`);
+    check((await f.textContent('[data-testid=refusal]')).includes('can only go back to the app that paid it'), 'says why');
+    await shot('refused-rent-payer');
+    await f.click('[data-testid=close]');
+    const reply = await pending;
+    check(reply.data?.error?.code === 'request-invalid', JSON.stringify(reply.data));
+    check((await signCount()) === before, 'sign count unchanged');
+    check(await connection.getAccountInfo(firstSession.pda, 'confirmed'), 'the session is still there');
+  });
+
   await scenario('revokeSession: a neutral hero, what is left, no money moves; it lands', async () => {
     check(firstSession, 'needs the first session');
+    const rev2 = (await connection.getAccountInfo(firstSession.pda, 'confirmed')).data[2] === 2;
     const preparedSlot = await currentSlot();
     const counter = (await counterOf()) + 1;
     const again = (slot) => client.prepareRevokeSession({ payer: payer.publicKey, walletPda: wallet, secp256r1: secp(slot), sessionPda: firstSession.pda, refundDestination: payer.publicKey });
@@ -411,6 +510,12 @@ async function main() {
     check((await text(f, 'hero-line')) === `0.02 SOL + 5 USDC · ends about ${at(firstSession.expiresAt)}`, `line ${await text(f, 'hero-line')}`);
     check((await text(f, 'sentence')) === 'No money moves.', 'sentence');
     check((await text(f, 'approve')).includes('Stop with passkey') && (await text(f, 'cancel')) === 'Keep it', 'buttons');
+    if (rev2) {
+      await f.click('[data-testid=details-toggle]');
+      const shown = payer.publicKey.toBase58();
+      const row = (await text(f, 'rent-refund')) ?? '';
+      check(row.startsWith('Rent returns to') && row.endsWith(`${shown.slice(0, 4)}…${shown.slice(-4)} (the app that paid it)`), `rent row ${row}`);
+    }
     await shot('session-stop');
     await press(f, '[data-testid=approve]');
     await rebindAndSend('revokeSession', await pending, again, (prep, r) => client.finalizeRevokeSession(prep, r));
@@ -419,7 +524,7 @@ async function main() {
 
   await scenario('removeAuthority: a Delegate key added with sdk-legacy, then removed through the portal', async () => {
     const delegate = Keypair.generate();
-    const add = await client.prepareAddAuthority({ payer: payer.publicKey, walletPda: wallet, secp256r1: secp(), newAuthority: { type: 'ed25519', publicKey: delegate.publicKey }, role: ROLE_SPENDER, policy: serializeActions([Actions.tokenRecurringLimit({ mint: usdc, limit: 50_000_000n, window: 86_400n })]) });
+    const add = await client.prepareAddAuthority({ payer: payer.publicKey, walletPda: wallet, secp256r1: secp(), newAuthority: { type: 'ed25519', publicKey: delegate.publicKey }, role: ROLE_SPENDER, policy: serializeActions([Actions.tokenRecurringLimit({ mint: usdc, limit: 50_000_000n, windowSeconds: 86_400n })]) });
     await send(client.finalizeAddAuthority(add, softSign(add.challenge)).instructions);
     const target = add.newAuthorityPda;
     const preparedSlot = await currentSlot();
