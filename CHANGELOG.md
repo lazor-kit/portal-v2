@@ -14,8 +14,11 @@
   Requests without a fragment are handled as before. The request's JSON must
   be in its canonical form (the shared encoder's output).
   On devnet, typed CreateSession is accepted from the program upgrade at
-  slot 509609649 (the binary with Unix-time session expiry); on a cluster
-  whose binary lacks it, the request is refused (`wrong-network`).
+  slot 510645372 (lazorkit-protocol #62: Unix-time session expiry, and new
+  authorities and sessions at layout revision 2); on a cluster whose binary
+  lacks time expiry, the request is refused (`wrong-network`). The devnet
+  deploy slot was 509609649 (#57) before; a portal still listing that slot
+  refuses typed CreateSession on devnet until it is redeployed.
   The chain reads behind a typed request ask for state at or past the slot
   the app prepared at (`minContextSlot`) and check the Clock in the same
   answer, so an RPC node that lags behind a load balancer can't make a new

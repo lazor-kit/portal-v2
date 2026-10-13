@@ -257,7 +257,7 @@ both redirect rules at `deny`, `framing.mode` at `enforce`, and
 ### `config/programs.json`
 
 ```json
-{ "devnet": { "programId": "57bTNWqtYTJbWuLWASKo6GqUTAK6oFDUR5c6hEc6V8nv", "lastDeploySlot": 509609649,
+{ "devnet": { "programId": "57bTNWqtYTJbWuLWASKo6GqUTAK6oFDUR5c6hEc6V8nv", "lastDeploySlot": 510645372,
               "features": ["wallet-bound-challenge", "d13", "nonowner-invariants", "time-expiry"] } }
 ```
 
