@@ -205,6 +205,36 @@ test('device-remove and key-remove: what goes, and who keeps full control', asyn
   assert.equal(detail(ks, 'USDC')?.value, 'Up to 50 USDC a day', 'a delegate policy is decoded with the same rules');
 });
 
+test('rent refunds (layout revision 2): Details says where the rent returns, Expert the payer in full; the first view is unchanged', async () => {
+  const short = (a: string) => `${a.slice(0, 4)}…${a.slice(-4)}`;
+  // The sponsored case: the app's fee payer paid the rent and gets it back.
+  const payer = addr();
+  const w = world('revokeSession', { session: addr(), refund: payer }, { payer });
+  w.chain.set((w.req as Extract<ApprovalRequest, { kind: 'revokeSession' }>).args.session, PROGRAM, sessionData({ wallet: w.wallet, sessionKey: addr(), expiresAt: H3, actions: sample.solLimit(15_000_000n), rentPayer: payer }));
+  const s = (await screenFor(w)).screen;
+  assert.equal(detail(s, 'Rent returns to')?.value, `${short(payer)} (the app that paid it)`);
+  assert.equal(detail(s, 'Deposit goes back to'), undefined);
+  assert.equal(s.experts.find((e) => e.label === 'Rent payer')?.value, payer);
+  assert.equal(s.heroLine, '0.015 SOL · ends about 6:50 PM', 'the actions after the payer are what is shown');
+  assert.ok(!firstViewTexts(s).some((t) => t.includes(payer.slice(0, 4))), 'no address on the first view');
+
+  // A payer other than this request's fee payer (another relayer paid it).
+  const other = addr();
+  const k = world('removeAuthority', { target: addr(), refund: other });
+  k.chain.set((k.req as Extract<ApprovalRequest, { kind: 'removeAuthority' }>).args.target, PROGRAM, ed25519Authority({ wallet: k.wallet, publicKey: addr(), role: 2, rentPayer: other }));
+  const ks = (await screenFor(k)).screen;
+  assert.equal(detail(ks, 'Rent returns to')?.value, `${short(other)} (the app that paid it)`);
+  assert.equal(ks.experts.find((e) => e.label === 'Rent payer')?.value, other);
+
+  // Revision 1: no payer recorded, so the old row and no Expert line.
+  const old = world('removeAuthority', { target: addr(), refund: addr() });
+  old.chain.set((old.req as Extract<ApprovalRequest, { kind: 'removeAuthority' }>).args.target, PROGRAM, ed25519Authority({ wallet: old.wallet, publicKey: addr(), role: 2 }));
+  const os = (await screenFor(old)).screen;
+  assert.equal(detail(os, 'Rent returns to'), undefined);
+  assert.ok(detail(os, 'Deposit goes back to'));
+  assert.equal(os.experts.find((e) => e.label === 'Rent payer'), undefined);
+});
+
 test('the first view carries nothing the app wrote: no addresses, no keys, only the app name LazorKit resolved', async () => {
   const w = create(cat(sample.solMax(2_000_000n), sample.tokenLimit(USDC, 5_000_000n)));
   const s = (await screenFor(w, { app: 'swap.tinydex.fun' })).screen;

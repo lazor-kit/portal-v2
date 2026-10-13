@@ -42,46 +42,60 @@ export function walletData(ownerCount = 1): Uint8Array {
   return d;
 }
 
-export function passkeyAuthority(o: { wallet: string; credentialId: Uint8Array; role?: 0 | 1 | 2; counter?: number; policy?: Uint8Array; rpId?: string }): Uint8Array {
+/**
+ * Layout revision 1 when `rentPayer` is absent; with it, revision 2
+ * (lazorkit-protocol #62): the payer's 32 bytes after the fixed part, before
+ * the policy or actions.
+ */
+const payerPart = (rentPayer: string | undefined) => (rentPayer ? key(rentPayer) : Buffer.alloc(0));
+const revision = (rentPayer: string | undefined) => (rentPayer ? 2 : 1);
+
+export function passkeyAuthority(o: { wallet: string; credentialId: Uint8Array; role?: 0 | 1 | 2; counter?: number; policy?: Uint8Array; rpId?: string; rentPayer?: string }): Uint8Array {
   const policy = o.policy ?? new Uint8Array(0);
-  const d = Buffer.alloc(145 + policy.length);
+  const payer = payerPart(o.rentPayer);
+  const d = Buffer.alloc(145 + payer.length + policy.length);
   d[0] = 0x22;
   d[1] = 1;
   d[2] = o.role ?? 0;
-  d[4] = 1;
+  d[4] = revision(o.rentPayer);
   d.writeUInt32LE(o.counter ?? 6, 8);
   d.writeUInt16LE(policy.length, 12);
   key(o.wallet).copy(d, 16);
   createHash('sha256').update(o.credentialId).digest().copy(d, 48);
   d[80] = 2;
   createHash('sha256').update(o.rpId ?? 'portal.lazor.sh').digest().copy(d, 113);
-  Buffer.from(policy).copy(d, 145);
+  payer.copy(d, 145);
+  Buffer.from(policy).copy(d, 145 + payer.length);
   return d;
 }
 
-export function ed25519Authority(o: { wallet: string; publicKey: string; role?: 0 | 1 | 2; policy?: Uint8Array }): Uint8Array {
+export function ed25519Authority(o: { wallet: string; publicKey: string; role?: 0 | 1 | 2; policy?: Uint8Array; rentPayer?: string }): Uint8Array {
   const policy = o.policy ?? new Uint8Array(0);
-  const d = Buffer.alloc(80 + policy.length);
+  const payer = payerPart(o.rentPayer);
+  const d = Buffer.alloc(80 + payer.length + policy.length);
   d[0] = 0x22;
   d[1] = 0;
   d[2] = o.role ?? 2;
-  d[4] = 1;
+  d[4] = revision(o.rentPayer);
   d.writeUInt16LE(policy.length, 12);
   key(o.wallet).copy(d, 16);
   key(o.publicKey).copy(d, 48);
-  Buffer.from(policy).copy(d, 80);
+  payer.copy(d, 80);
+  Buffer.from(policy).copy(d, 80 + payer.length);
   return d;
 }
 
-export function sessionData(o: { wallet: string; sessionKey: string; expiresAt: bigint; actions?: Uint8Array }): Uint8Array {
+export function sessionData(o: { wallet: string; sessionKey: string; expiresAt: bigint; actions?: Uint8Array; rentPayer?: string }): Uint8Array {
   const actions = o.actions ?? new Uint8Array(0);
-  const d = Buffer.alloc(80 + actions.length);
+  const payer = payerPart(o.rentPayer);
+  const d = Buffer.alloc(80 + payer.length + actions.length);
   d[0] = 0x23;
-  d[2] = 1;
+  d[2] = revision(o.rentPayer);
   key(o.wallet).copy(d, 8);
   key(o.sessionKey).copy(d, 40);
   u64(o.expiresAt).copy(d, 72);
-  Buffer.from(actions).copy(d, 80);
+  payer.copy(d, 80);
+  Buffer.from(actions).copy(d, 80 + payer.length);
   return d;
 }
 
@@ -191,15 +205,15 @@ export interface World {
   query: { action: 'sign'; message: string; credentialId: string; transaction: string; displayMessage: null };
 }
 
-/** A wallet with one passkey (counter 6) and the request `args` of `kind`, consistent with it. */
-export function world(kind: ApprovalRequest['kind'], args: Record<string, string>, o: { counter?: number; role?: 0 | 1 | 2; policy?: Uint8Array; ownerCount?: number } = {}): World {
+/** A wallet with one passkey (counter 6, of layout revision 2 when `signerRentPayer` is given) and the request `args` of `kind`, consistent with it. */
+export function world(kind: ApprovalRequest['kind'], args: Record<string, string>, o: { counter?: number; role?: 0 | 1 | 2; policy?: Uint8Array; ownerCount?: number; signerRentPayer?: string; payer?: string } = {}): World {
   const chain = new FakeChain();
   const credentialId = randomBytes(24);
   const wallet = addr();
-  const payer = addr();
+  const payer = o.payer ?? addr();
   const authority = passkeyAuthorityAddress(PROGRAM, wallet, credentialId);
   chain.set(wallet, PROGRAM, walletData(o.ownerCount ?? 1));
-  chain.set(authority, PROGRAM, passkeyAuthority({ wallet, credentialId, role: o.role, counter: o.counter ?? 6, policy: o.policy }));
+  chain.set(authority, PROGRAM, passkeyAuthority({ wallet, credentialId, role: o.role, counter: o.counter ?? 6, policy: o.policy, rentPayer: o.signerRentPayer }));
   const json = {
     v: 1,
     kind,

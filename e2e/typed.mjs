@@ -408,13 +408,16 @@ async function main() {
     check(typed.counter === p.counter, 'counter as prepared');
     const session = await connection.getAccountInfo(p.prepared.sessionPda, 'confirmed');
     check(session && session.data.readBigUInt64LE(72) === p.expiresAt, 'the session landed with the expiry shown');
-    check(Buffer.from(session.data.subarray(80)).equals(Buffer.from(serializeActions(actions))), 'with the limits shown');
+    // Layout revision 2 (lazorkit-protocol #62) records the rent payer at 80..112, before the actions.
+    const rev2 = session.data[2] === 2;
+    if (rev2) check(new PublicKey(session.data.subarray(80, 112)).equals(payer.publicKey), 'the fee payer is recorded as the rent payer');
+    check(Buffer.from(session.data.subarray(rev2 ? 112 : 80)).equals(Buffer.from(serializeActions(actions))), 'with the limits shown');
     firstSession = { pda: p.prepared.sessionPda, expiresAt: p.expiresAt };
     return { waitedMs: Date.now() - started, slotsBetween: Number(BigInt(typed.slot) - p.preparedSlot), sig };
   });
 
   await scenario('createSession: the counter moves forward before Approve (another approval landed); the portal signs the chain counter and it lands', async () => {
-    const actions = [Actions.solRecurringLimit({ limit: 10_000_000n, window: 86_400n })];
+    const actions = [Actions.solRecurringLimit({ limit: 10_000_000n, windowSeconds: 86_400n })];
     const p = await prepareCreate({ actions });
     const pending = open(p.url);
     const f = await review(await frame());
@@ -464,8 +467,38 @@ async function main() {
     check(reply.data?.error?.code === 'user-rejected', 'rejected');
   });
 
+  await scenario('revokeSession on a revision-2 session: a refund to anyone but the rent payer is refused before the passkey signs', async () => {
+    check(firstSession, 'needs the first session');
+    const account = await connection.getAccountInfo(firstSession.pda, 'confirmed');
+    if (account.data[2] !== 2) return { skipped: 'the program writes layout revision 1 (no rent payer)' };
+    // sdk-legacy 2.1.0 refuses to prepare it (RefundDestinationMismatchError), so the challenge is the portal's
+    // own recipe (test/typed-parity.test.ts holds it equal to the SDK's).
+    const { decodeApprovalRequest, preparedChallenge } = await import('../src/approval/index.ts');
+    const elsewhere = Keypair.generate().publicKey;
+    const preparedSlot = await currentSlot();
+    const counter = (await counterOf()) + 1;
+    const args = { session: firstSession.pda.toBase58(), refund: elsewhere.toBase58() };
+    const probe = typedUrl({ kind: 'revokeSession', args, counter, preparedSlot, challenge: new Uint8Array(32) });
+    const decoded = decodeApprovalRequest(probe.split('lk1=')[1]);
+    check(decoded.ok, 'the request decodes');
+    const challenge = preparedChallenge(decoded.request);
+    const before = await signCount();
+    const pending = open(typedUrl({ kind: 'revokeSession', args, counter, preparedSlot, challenge }));
+    const f = await frame();
+    await f.waitForSelector('[data-testid=refusal]', { timeout: 30_000 });
+    check((await f.getAttribute('[data-testid=refusal]', 'data-reason')) === 'request-invalid', `refused: ${await f.getAttribute('[data-testid=refusal]', 'data-reason')}`);
+    check((await f.textContent('[data-testid=refusal]')).includes('can only go back to the app that paid it'), 'says why');
+    await shot('refused-rent-payer');
+    await f.click('[data-testid=close]');
+    const reply = await pending;
+    check(reply.data?.error?.code === 'request-invalid', JSON.stringify(reply.data));
+    check((await signCount()) === before, 'sign count unchanged');
+    check(await connection.getAccountInfo(firstSession.pda, 'confirmed'), 'the session is still there');
+  });
+
   await scenario('revokeSession: a neutral hero, what is left, no money moves; it lands', async () => {
     check(firstSession, 'needs the first session');
+    const rev2 = (await connection.getAccountInfo(firstSession.pda, 'confirmed')).data[2] === 2;
     const preparedSlot = await currentSlot();
     const counter = (await counterOf()) + 1;
     const again = (slot) => client.prepareRevokeSession({ payer: payer.publicKey, walletPda: wallet, secp256r1: secp(slot), sessionPda: firstSession.pda, refundDestination: payer.publicKey });
@@ -477,6 +510,12 @@ async function main() {
     check((await text(f, 'hero-line')) === `0.02 SOL + 5 USDC · ends about ${at(firstSession.expiresAt)}`, `line ${await text(f, 'hero-line')}`);
     check((await text(f, 'sentence')) === 'No money moves.', 'sentence');
     check((await text(f, 'approve')).includes('Stop with passkey') && (await text(f, 'cancel')) === 'Keep it', 'buttons');
+    if (rev2) {
+      await f.click('[data-testid=details-toggle]');
+      const shown = payer.publicKey.toBase58();
+      const row = (await text(f, 'rent-refund')) ?? '';
+      check(row.startsWith('Rent returns to') && row.endsWith(`${shown.slice(0, 4)}…${shown.slice(-4)} (the app that paid it)`), `rent row ${row}`);
+    }
     await shot('session-stop');
     await press(f, '[data-testid=approve]');
     await rebindAndSend('revokeSession', await pending, again, (prep, r) => client.finalizeRevokeSession(prep, r));
@@ -485,7 +524,7 @@ async function main() {
 
   await scenario('removeAuthority: a Delegate key added with sdk-legacy, then removed through the portal', async () => {
     const delegate = Keypair.generate();
-    const add = await client.prepareAddAuthority({ payer: payer.publicKey, walletPda: wallet, secp256r1: secp(), newAuthority: { type: 'ed25519', publicKey: delegate.publicKey }, role: ROLE_SPENDER, policy: serializeActions([Actions.tokenRecurringLimit({ mint: usdc, limit: 50_000_000n, window: 86_400n })]) });
+    const add = await client.prepareAddAuthority({ payer: payer.publicKey, walletPda: wallet, secp256r1: secp(), newAuthority: { type: 'ed25519', publicKey: delegate.publicKey }, role: ROLE_SPENDER, policy: serializeActions([Actions.tokenRecurringLimit({ mint: usdc, limit: 50_000_000n, windowSeconds: 86_400n })]) });
     await send(client.finalizeAddAuthority(add, softSign(add.challenge)).instructions);
     const target = add.newAuthorityPda;
     const preparedSlot = await currentSlot();

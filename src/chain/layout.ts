@@ -1,7 +1,8 @@
 /**
  * LazorKit v2 accounts as stored on chain (lazorkit-protocol
  * `program/src/state`): program addresses, the vault address, and decoders
- * that accept only a v2 account of the expected type and layout version.
+ * that accept only a v2 account of the expected type and a layout revision
+ * this page knows.
  */
 import { PublicKey } from '@solana/web3.js';
 import bs58 from 'bs58';
@@ -15,8 +16,20 @@ export const LAZORKIT_PROGRAM: Readonly<Record<Cluster, string>> = {
 /** First byte of each account: the protocol version (2) in the high nibble, the type in the low one. */
 export const DISCRIMINATOR = { wallet: 0x21, authority: 0x22, session: 0x23, deferred: 0x24 } as const;
 
-/** The account layout revision every read path accepts (`CURRENT_ACCOUNT_VERSION`). */
+/** The first account layout revision (`layout_version::FIRST`): every read path accepts it. Wallets and DeferredExecs are only ever this one. */
 export const ACCOUNT_VERSION = 1;
+/**
+ * Layout revision 2 (lazorkit-protocol #62, `layout_version::AUTHORITY` and
+ * `SESSION`): an authority or a session records the account that paid its
+ * rent (32 bytes) after its fixed part, so its policy or actions start 32
+ * bytes later. The program refunds such an account's rent only to that payer.
+ */
+export const RENT_PAYER_VERSION = 2;
+
+/** How many bytes of rent payer an authority or session of `revision` records, or null for a revision this page doesn't know. */
+function rentPayerBytes(revision: number): 0 | 32 | null {
+  return revision === ACCOUNT_VERSION ? 0 : revision === RENT_PAYER_VERSION ? 32 : null;
+}
 
 /** Where each listable account names its wallet. */
 export const WALLET_OFFSET = { authority: 16, session: 8, deferred: 72 } as const;
@@ -62,6 +75,12 @@ export interface AuthorityAccount {
       };
   /** The spending policy (an action buffer), or null when it has none. */
   readonly policy: Uint8Array | null;
+  /**
+   * The account that paid its rent (layout revision 2), which RemoveAuthority
+   * refunds only to; null for a revision-1 authority, which records none and
+   * refunds where the instruction says.
+   */
+  readonly rentPayer: string | null;
 }
 
 export interface SessionAccount {
@@ -78,6 +97,12 @@ export interface SessionAccount {
   readonly expiresAt: bigint;
   /** The limits (an action buffer); empty when it has none. */
   readonly actions: Uint8Array;
+  /**
+   * The account that paid its rent (layout revision 2), which RevokeSession
+   * and CloseExpiredSession refund only to; null for a revision-1 session,
+   * which records none and refunds where the instruction says.
+   */
+  readonly rentPayer: string | null;
 }
 
 export interface DeferredAccount {
@@ -97,9 +122,15 @@ const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padSt
 const key = (data: Uint8Array, at: number) => bs58.encode(data.subarray(at, at + 32));
 const view = (data: Uint8Array) => new DataView(data.buffer, data.byteOffset, data.byteLength);
 
-/** An Authority account, or null when `data` is not a v2 Authority of the current layout. */
+/**
+ * An Authority account, or null when `data` is not a v2 Authority of layout
+ * revision 1 or 2: header (48), key material (to 80 for Ed25519, to 145 for
+ * a passkey), from revision 2 the rent payer (32), then the policy.
+ */
 export function decodeAuthority(address: string, data: Uint8Array): AuthorityAccount | null {
-  if (data.length < AUTHORITY_HEADER || data[0] !== DISCRIMINATOR.authority || data[4] !== ACCOUNT_VERSION) return null;
+  if (data.length < AUTHORITY_HEADER || data[0] !== DISCRIMINATOR.authority) return null;
+  const payerBytes = rentPayerBytes(data[4]);
+  if (payerBytes === null) return null;
   const role = ROLES[data[2]];
   if (!role) return null;
   const dv = view(data);
@@ -122,30 +153,39 @@ export function decodeAuthority(address: string, data: Uint8Array): AuthorityAcc
   } else {
     return null;
   }
-  if (data.length < end + policyLength) return null;
+  const policyAt = end + payerBytes;
+  if (data.length < policyAt + policyLength) return null;
   return {
     address,
     wallet: key(data, 16),
     role,
     counter: dv.getUint32(8, true),
     key: authorityKey,
-    policy: policyLength > 0 ? data.slice(end, end + policyLength) : null,
+    policy: policyLength > 0 ? data.slice(policyAt, policyAt + policyLength) : null,
+    rentPayer: payerBytes ? key(data, end) : null,
   };
 }
 
-/** A Session account, or null when `data` is not a v2 Session of the current layout. */
+/**
+ * A Session account, or null when `data` is not a v2 Session of layout
+ * revision 1 or 2: header (80), from revision 2 the rent payer (80..112),
+ * then the actions.
+ */
 export function decodeSession(address: string, data: Uint8Array): SessionAccount | null {
-  if (data.length < SESSION_HEADER || data[0] !== DISCRIMINATOR.session || data[2] !== ACCOUNT_VERSION) return null;
+  if (data.length < SESSION_HEADER || data[0] !== DISCRIMINATOR.session) return null;
+  const payerBytes = rentPayerBytes(data[2]);
+  if (payerBytes === null || data.length < SESSION_HEADER + payerBytes) return null;
   return {
     address,
     wallet: key(data, 8),
     sessionKey: key(data, 40),
     expiresAt: view(data).getBigUint64(72, true),
-    actions: data.slice(SESSION_HEADER),
+    actions: data.slice(SESSION_HEADER + payerBytes),
+    rentPayer: payerBytes ? key(data, SESSION_HEADER) : null,
   };
 }
 
-/** A DeferredExec account, or null when `data` is not a v2 DeferredExec of the current layout. */
+/** A DeferredExec account, or null when `data` is not a v2 DeferredExec of layout revision 1 (the only one it has). */
 export function decodeDeferred(address: string, data: Uint8Array): DeferredAccount | null {
   if (data.length < DEFERRED_SIZE || data[0] !== DISCRIMINATOR.deferred || data[1] !== ACCOUNT_VERSION) return null;
   return {

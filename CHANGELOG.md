@@ -27,6 +27,14 @@
   while the dialog opens no longer start the reads over (createSession with
   `@lazorkit/wallet` 4.0.0-next.0 made 37-41 reads before Approve could be
   pressed; now 5, then one a second). A refusal stays until Try again.
+  Authorities and sessions of layout revision 2 (lazorkit-protocol #62,
+  which records the account that paid the rent) are read as well as
+  revision-1 ones; a revision the portal doesn't know is still unreadable.
+  A typed RevokeSession or RemoveAuthority on a revision-2 account must
+  refund to that recorded payer, as the program requires: any other `refund`
+  is refused (`request-invalid`) before the passkey signs, and Details shows
+  "Rent returns to <address> (the app that paid it)". Revision-1 accounts
+  record no payer and refund wherever the request says, as before.
 
 - The portal signs only recognised challenge formats: LazorKit signed
   messages (shown as their text, which must match the challenge),

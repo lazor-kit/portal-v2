@@ -515,9 +515,19 @@ function createScreen({ req, view, app, contextCaution = null, clock = {} }: Scr
   };
 }
 
-function depositRow(req: ApprovalRequest & { args: { refund: string } }, app: string): TextRow {
+/**
+ * Where the closed account's rent goes. A revision-2 account records who paid
+ * it, and the read has already checked the refund is that payer: "Rent
+ * returns to". A revision-1 account records none, so the row names only where
+ * the request sends it.
+ */
+function depositRow(req: ApprovalRequest & { args: { refund: string } }, app: string, rentPayer: string | null): TextRow {
+  if (rentPayer !== null && rentPayer === req.args.refund) return { label: 'Rent returns to', value: `${short(req.args.refund)} (the app that paid it)`, testId: 'rent-refund' };
   return { label: 'Deposit goes back to', value: req.args.refund === req.payer ? `${cap(app)}'s fee payer` : short(req.args.refund) };
 }
+
+/** For experts: the recorded rent payer in full, when the account records one. */
+const rentPayerRow = (rentPayer: string | null): TextRow[] => (rentPayer === null ? [] : [{ label: 'Rent payer', value: rentPayer }]);
 
 function stopScreen({ req, view, app, contextCaution = null, clock = {} }: ScreenInput & { req: Extract<ApprovalRequest, { kind: 'revokeSession' }> }): TypedScreen {
   const session = view.session!;
@@ -562,13 +572,14 @@ function stopScreen({ req, view, app, contextCaution = null, clock = {} }: Scree
     caution: contextCaution,
     sentence: 'No money moves.',
     facts: [],
-    details: [...left, { label: 'Money', value: 'None moves' }, FEE, depositRow(req, app)],
+    details: [...left, { label: 'Money', value: 'None moves' }, FEE, depositRow(req, app, session.rentPayer)],
     experts: [
       networkRow(req),
       { label: 'Permission', value: req.args.session },
       { label: 'Session key', value: session.sessionKey },
       { label: 'Rules', value: session.rules.length ? session.rules.map(rawRule).join('\n') : 'None (no limits)', testId: 'raw-rules' },
       { label: 'Fee payer', value: req.payer },
+      ...rentPayerRow(session.rentPayer),
       SIGNED_WITH,
     ],
     approveLabel: 'Stop with passkey',
@@ -608,7 +619,7 @@ function removeScreen({ req, view, app, knownHosts = [], contextCaution = null, 
       ...programRows(target.rules, basis, clock),
       { label: 'Money', value: 'None moves' },
       FEE,
-      depositRow(req, app),
+      depositRow(req, app, target.rentPayer),
     ],
     experts: [
       networkRow(req),
@@ -616,6 +627,7 @@ function removeScreen({ req, view, app, knownHosts = [], contextCaution = null, 
       ...(target.key.type === 'ed25519' ? [{ label: 'Public key', value: target.key.publicKey }] : []),
       ...(target.rules.length ? [{ label: 'Rules', value: target.rules.map(rawRule).join('\n') }] : []),
       { label: 'Fee payer', value: req.payer },
+      ...rentPayerRow(target.rentPayer),
       SIGNED_WITH,
     ],
     approveLabel: 'Remove with passkey',
