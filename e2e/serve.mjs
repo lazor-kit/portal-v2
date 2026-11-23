@@ -115,7 +115,7 @@ export async function startRpc({ port, validOn = () => 'devnet', calls }) {
     for await (const chunk of req) chunks.push(chunk);
     const cluster = new URL(req.url, 'http://x').pathname.slice(1);
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    calls.push({ cluster, method: body.method, url: req.url });
+    calls.push({ cluster, method: body.method, params: body.params, url: req.url });
     const context = { slot: 1, apiVersion: '2.0.0' };
     const results = {
       getMultipleAccounts: () => ({ context, value: (Array.isArray(body.params?.[0]) ? body.params[0] : []).map(() => null) }),

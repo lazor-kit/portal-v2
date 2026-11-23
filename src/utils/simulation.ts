@@ -121,7 +121,7 @@ export async function simulateTransaction(base64Tx: string, cluster: Cluster): P
         const txBuffer = Buffer.from(base64Tx, "base64");
 
         try {
-            const messageOffset = getMessageOffset(txBuffer);
+            const messageOffset = txBuffer[0] === 0x81 ? 0 : getMessageOffset(txBuffer);
 
             // Determine version based on the Message Prefix (first byte of message)
             let isVersionedPayload = false;
@@ -218,7 +218,23 @@ export async function simulateTransaction(base64Tx: string, cluster: Cluster): P
             }
         };
 
-        if (isVersioned) {
+        if (isVersioned && (transaction as VersionedTransaction).version === 1) {
+            // The decoder can read v1, but this web3.js release cannot
+            // reserialize it. Send the original bytes through the same proxy.
+            const response = await fetch(rpcEndpoint(cluster), {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                    jsonrpc: "2.0", id: 1, method: "simulateTransaction",
+                    params: [base64Tx, { ...config, encoding: "base64", sigVerify: false }],
+                }),
+            });
+            const body = await response.json();
+            if (!response.ok || !body.result?.value) {
+                throw new Error(body.error?.message ?? "Transaction preview simulation unavailable");
+            }
+            simulated = body.result.value;
+        } else if (isVersioned) {
             const response = await connection.simulateTransaction(transaction as VersionedTransaction, config);
             simulated = response.value;
         } else {

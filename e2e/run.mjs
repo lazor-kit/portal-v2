@@ -8,7 +8,9 @@
  *
  * Needs a built SDK (SDK_DIST, or @lazorkit/wallet installed here), the
  * `playwright` package (resolvable from here, or PLAYWRIGHT_MODULE=<path>) and
- * its Chromium. Writes e2e/.out/results.json and screenshots.
+ * its Chromium. The transaction v1 case also uses web3.js v3 from
+ * PORTAL_E2E_WEB3_V3 (or the web3js-v3 npm alias).
+ * Writes e2e/.out/results.json and screenshots.
  *
  * Origins: dApp A http://localhost:5174 (registered), dApp B
  * http://127.0.0.1:5175 (not registered), portal http://localhost:4173 (the
@@ -65,7 +67,7 @@ const servers = [
 
 // ─── Browser ────────────────────────────────────────────────────────────────
 
-const browser = await chromium.launch({ headless: process.env.HEADED ? false : true });
+const browser = await chromium.launch({ headless: !process.env.HEADED, executablePath: process.env.CHROMIUM_EXECUTABLE });
 const pageErrors = [];
 const rpcBodies = [];
 
@@ -200,6 +202,22 @@ function previewTransaction({ to = Keypair.generate().publicKey, payer = Keypair
     instructions: [SystemProgram.transfer({ fromPubkey: Keypair.generate().publicKey, toPubkey: to, lamports: 1_000_000 })],
   }).compileToV0Message();
   return Buffer.from(new VersionedTransaction(message).serialize()).toString('base64');
+}
+
+function largeV1Preview() {
+  const sdkDir = process.env.SDK_DIST ?? join(OUT, '../../node_modules/@lazorkit/wallet');
+  const requireSdk = createRequire(join(sdkDir, 'package.json'));
+  const web3 = process.env.PORTAL_E2E_WEB3_V3 ? require(process.env.PORTAL_E2E_WEB3_V3) : requireSdk('web3js-v3');
+  const payer = new web3.PublicKey(new PublicKey(DAPP_FEE_PAYER).toBytes());
+  const instructions = Array.from({ length: 45 }, () => web3.SystemProgram.transfer({
+    fromPubkey: payer,
+    toPubkey: new web3.PublicKey(Keypair.generate().publicKey.toBytes()),
+    lamports: 1_000_000,
+  }));
+  const message = new web3.TransactionMessage({
+    payerKey: payer, recentBlockhash: Keypair.generate().publicKey.toBase58(), instructions,
+  }).compileToV1Message({ computeUnitLimit: 500_000 });
+  return Buffer.from(new web3.VersionedTransaction(message).serialize()).toString('base64');
 }
 
 // ─── Scenarios ──────────────────────────────────────────────────────────────
@@ -366,6 +384,22 @@ await scenario('transaction: preview simulated through /api/rpc on the network i
   const methods = rpcCalls.map((c) => `${c.cluster}:${c.method}`);
   check(methods.includes('devnet:simulateTransaction') && methods.includes('mainnet:isBlockhashValid'), methods.join(', '));
   return { rpc: methods };
+});
+
+await scenario('transaction v1: the large preview reaches the RPC byte for byte before approval', async () => {
+  const challenge = randomBytes(32);
+  const preview = largeV1Preview();
+  check(Buffer.from(preview, 'base64').length > 1536, 'v1 preview exercises the raised portal cap');
+  rpcCalls.length = 0;
+  const pending = A.page.evaluate(([ch, tx, c]) => window.lk.sign(ch, tx, c, 'devnet'), [b64url(challenge), preview, credentialId]);
+  const frame = await portalFrame(A.page);
+  await frame.waitForSelector('[data-testid=transaction-review][data-loading=false]');
+  check((await frame.textContent('[data-testid=preview-source]')).includes('E2E dApp says'), 'preview attributed to the app');
+  check(rpcCalls.some(call => call.method === 'simulateTransaction' && call.params[0] === preview), 'original preview reached the simulation RPC');
+  await press(frame, '[data-testid=approve]');
+  const result = await pending;
+  check(result.ok, JSON.stringify(result));
+  await verifyAssertion(A, { credentialId, signature: result.value.signature, clientDataJson: result.value.clientDataJsonBase64, authenticatorData: result.value.authenticatorDataBase64 }, challenge);
 });
 
 await scenario('approval (32 bytes, no preview) from a verified site: a caution, Cancel recommended, no tick box', async () => {

@@ -52,6 +52,8 @@ export const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 export const UPSTREAM_TIMEOUT_MS = 8_000;
 export const MAX_ACCOUNT_KEYS = 100;
 export const MAX_TRANSACTION_CHARS = 2048;
+const MAX_V1_TRANSACTION_BYTES = 4096;
+const MAX_V1_TRANSACTION_CHARS = Math.ceil(MAX_V1_TRANSACTION_BYTES / 3) * 4;
 export const MAX_SIMULATION_ADDRESSES = 128;
 export const MAX_SIGNATURES = 1000;
 export const MAX_DATA_SLICE_BYTES = 10 * 1024 * 1024;
@@ -187,6 +189,16 @@ function decodeBase64(text: string): Uint8Array | null {
 const isSignature = (value: unknown): value is string =>
   typeof value === 'string' && BASE58_SIGNATURE.test(value) && decodeBase58(value)?.length === 64;
 
+/** Transaction v1 starts with its version; legacy layouts start with the signature count. */
+function isSimulationTransaction(tx: unknown): tx is string {
+  if (typeof tx !== 'string' || tx.length === 0 || tx.length > MAX_V1_TRANSACTION_CHARS || !BASE64.test(tx)) {
+    return false;
+  }
+  if (tx.length <= MAX_TRANSACTION_CHARS) return true;
+  const bytes = decodeBase64(tx);
+  return bytes !== null && bytes[0] === 0x81 && bytes.length <= MAX_V1_TRANSACTION_BYTES;
+}
+
 /** Optional `{ commitment, minContextSlot, dataSlice, ... }` with only `allowed` keys. */
 function checkConfig(value: Json | undefined, allowed: readonly string[]): string | null {
   if (value === undefined) return null;
@@ -257,7 +269,7 @@ function checkParams(method: AllowedMethod, params: Json[], cluster: Cluster): s
     case 'simulateTransaction': {
       if (params.length !== 2) return 'expected [transaction, config]';
       const [tx, config] = params;
-      if (typeof tx !== 'string' || tx.length === 0 || tx.length > MAX_TRANSACTION_CHARS || !BASE64.test(tx)) {
+      if (!isSimulationTransaction(tx)) {
         return 'expected a base64 transaction';
       }
       if (!isObject(config) || config.encoding !== 'base64') return 'expected base64 encoding';

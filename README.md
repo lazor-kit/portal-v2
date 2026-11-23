@@ -480,6 +480,13 @@ pnpm lint:checked      # lint of the security, page and api code
 pnpm build
 ```
 
+To point both network labels at the same local validator for a cutover
+rehearsal, use the loopback-only development config:
+
+```bash
+LAZORKIT_PROTOCOL_LOCAL_RPC=http://127.0.0.1:8899 pnpm dev --config vite.local-stack.config.ts
+```
+
 ### End-to-end run
 
 `e2e/run.mjs` drives the real SDK `DialogManager` against two local builds of
@@ -494,6 +501,7 @@ the address sheet, the way back after a redirect).
 # a built @lazorkit/wallet (lazor-kit packages/react after `pnpm build`)
 SDK_DIST=../lazor-kit/packages/react \
 PLAYWRIGHT_MODULE=/path/to/node_modules/playwright \
+PORTAL_E2E_WEB3_V3=/path/to/node_modules/web3js-v3 \
 pnpm e2e
 ```
 

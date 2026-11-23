@@ -13,7 +13,7 @@ import {
   TransactionMessage,
   VersionedTransaction,
 } from '@solana/web3.js';
-import { handleRpc, MAX_REQUEST_BYTES, type RpcEnv } from '../api/rpc.ts';
+import { handleRpc, MAX_REQUEST_BYTES, validateRpcRequest, type RpcEnv } from '../api/rpc.ts';
 
 const PORTAL = 'https://portal.example';
 const SECRET_UPSTREAM = 'https://mainnet.upstream.example/?api-key=TEST-SECRET-0000';
@@ -303,4 +303,18 @@ test("the upstream's minContextSlot error reaches the page as it is", async () =
   );
   assert.equal(r.status, 200);
   assert.deepEqual(((await r.json()) as { error: unknown }).error, error);
+});
+
+test('transaction v1 previews may exceed the legacy packet bound but stop at 4096 bytes', () => {
+  const request = (bytes: number, prefix: number) => {
+    const payload = Buffer.alloc(bytes);
+    payload[0] = prefix;
+    return validateRpcRequest({
+      jsonrpc: '2.0', id: 1, method: 'simulateTransaction',
+      params: [payload.toString('base64'), { encoding: 'base64', sigVerify: false }],
+    }, 'devnet');
+  };
+  assert.equal(request(4096, 0x81).ok, true);
+  assert.equal(request(4097, 0x81).ok, false);
+  assert.equal(request(1800, 0x01).ok, false);
 });
