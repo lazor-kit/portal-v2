@@ -213,6 +213,7 @@ export function headersFor(registry, policy, scriptHashes = inlineScriptHashes(r
 export function vercelConfig(registry, policy, scriptHashes) {
   return {
     $schema: 'https://openapi.vercel.sh/vercel.json',
+    git: { deploymentEnabled: { 'staging/protocol-v1-preview': false } },
     headers: [{ source: '/(.*)', headers: headersFor(registry, policy, scriptHashes) }],
   };
 }
