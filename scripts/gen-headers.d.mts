@@ -10,5 +10,5 @@ export declare function inlineScriptHashes(html: string): string[];
 export declare function registeredAncestors(registry: Registry, policy: PortalPolicy): string;
 export declare function contentDirectives(scriptHashes: readonly string[]): string[];
 export declare function headersFor(registry: Registry, policy: PortalPolicy, scriptHashes?: readonly string[]): Header[];
-export declare function vercelConfig(registry: Registry, policy: PortalPolicy, scriptHashes?: readonly string[]): { git: { deploymentEnabled: Record<string, boolean> }; headers: { source: string; headers: Header[] }[] };
+export declare function vercelConfig(registry: Registry, policy: PortalPolicy, scriptHashes?: readonly string[]): { git: { deploymentEnabled: boolean }; headers: { source: string; headers: Header[] }[] };
 export declare function render(registry: Registry, policy: PortalPolicy, scriptHashes?: readonly string[]): string;
