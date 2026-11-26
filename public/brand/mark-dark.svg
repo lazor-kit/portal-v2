@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>LazorKit</title>
+  <defs>
+    <linearGradient id="mark" x1="82" y1="394" x2="421" y2="102" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6f3dfe"/>
+      <stop offset="1" stop-color="#7139fc"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="98" fill="#0a0a16"/>
+  <path d="M430 102 104 286Q98 290 102 298L149 386Q152 393 160 392L405 360 223 304Z" fill="url(#mark)"/>
+</svg>
